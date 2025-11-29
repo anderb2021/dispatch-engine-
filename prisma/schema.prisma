@@ -1,0 +1,109 @@
+// -----------------------------------------------------
+// GENERATOR & DATASOURCE
+// -----------------------------------------------------
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+// -----------------------------------------------------
+// MODELS (no enums, we use String instead)
+// -----------------------------------------------------
+
+model User {
+  id           Int        @id @default(autoincrement())
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  name         String
+  phoneNumber  String     @unique
+
+  /// "CUSTOMER" | "PROVIDER" | "ADMIN"
+  role         String     @default("CUSTOMER")
+
+  // Relationships
+  providers    Provider[]           // If this user is a PROVIDER, we enforce 1:1 via Provider.userId @unique
+  jobRequests  JobRequest[] @relation("CustomerJobRequests")
+
+  @@index([phoneNumber])
+}
+
+model Provider {
+  id           Int        @id @default(autoincrement())
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  userId       Int        @unique // 1:1 mapping between User and Provider
+  serviceArea  String     // "District 1", "HCMC", etc.
+  isActive     Boolean    @default(true)
+
+  user         User       @relation(fields: [userId], references: [id])
+  broadcasts   JobBroadcast[]
+  acceptedJobs JobRequest[] @relation("AcceptedJobRequests")
+
+  @@index([serviceArea])
+  @@index([isActive])
+}
+
+model JobRequest {
+  id                  Int        @id @default(autoincrement())
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+
+  // Customer info (may or may not be linked to a User)
+  customerId          Int?
+  customerName        String     // Keep for backward compatibility
+  customerFirstName   String?
+  customerLastName    String?
+  customerPhone       String
+  customerEmail       String?    // Email for notifications
+  locationText        String     // Keep for backward compatibility
+  exactLocation       String?    // Detailed/exact location
+  problemDescription  String     // Keep for backward compatibility
+  issueType           String?    // Selected issue from dropdown
+  issueNotes          String?    // Additional notes if "Other" selected
+  emergencyLevel      Int?       // 1-5, 1 being not extremely critical
+
+  /// "PENDING" | "BROADCASTING" | "ACCEPTED" | "EXPIRED" | "CANCELLED"
+  status              String      @default("PENDING")
+
+  /// "WEB_FORM" | "INBOUND_SMS" | "INBOUND_CALL"
+  intakeChannel       String      @default("WEB_FORM")
+
+  // Winner (the provider who gets the job)
+  acceptedProviderId  Int?
+
+  // Relations
+  customer            User?     @relation("CustomerJobRequests", fields: [customerId], references: [id])
+  acceptedProvider    Provider? @relation("AcceptedJobRequests", fields: [acceptedProviderId], references: [id])
+  broadcasts          JobBroadcast[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@index([customerPhone])
+}
+
+model JobBroadcast {
+  id               Int        @id @default(autoincrement())
+  createdAt        DateTime   @default(now())
+
+  jobRequestId     Int
+  providerId       Int
+  sentAt           DateTime   @default(now())
+
+  /// "NONE" | "ACCEPTED" | "REJECTED" | "TOO_LATE"
+  responseStatus   String     @default("NONE")
+  respondedAt      DateTime?
+
+  job              JobRequest  @relation(fields: [jobRequestId], references: [id])
+  provider         Provider    @relation(fields: [providerId], references: [id])
+
+  @@unique([jobRequestId, providerId]) // one broadcast record per job+provider
+  @@index([providerId])
+  @@index([jobRequestId])
+}
+

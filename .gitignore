@@ -1,0 +1,78 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Database
+prisma/dev.db
+prisma/dev.db-journal
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Logs
+logs/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.temp
+
+# Build files
+dist/
+build/
+
+# Test files
+coverage/
+.nyc_output/
+
+# ngrok
+ngrok.exe
+ngrok
+
+# Helper scripts (optional - you can include these if you want)
+# accept-job.js
+# check-webhook-status.js
+# configure-ngrok-token.ps1
+# configure-webhook.ps1
+# deactivate-providers.js
+# delete-all-jobs-simple.js
+# delete-all-jobs.js
+# diagnose-webhook.js
+# get-ngrok-url.ps1
+# install-ngrok.ps1
+# setup-webhook-simple.ps1
+# setup-webhook.js
+# test-webhook-form.js
+# test-webhook.js
+
+# Documentation files (optional - you can include these)
+# DEMO_SETUP.md
+# EMAIL_SETUP.md
+# FIND_NGROK_URL.md
+# INSTALL_NGROK.md
+# QUICK_WEBHOOK_SETUP.txt
+# SETUP_NGROK_ACCOUNT.md
+# TWILIO_WEBHOOK_SETUP.md
+# WEBHOOK_CONFIGURATION_STEPS.txt
+# WHATSAPP_WEBHOOK_SETUP.md
+
