@@ -1,0 +1,135 @@
+import { CheckCircle2, Lock, PlugZap, Sparkles, WalletCards, Zap } from "lucide-react";
+import { Dashboard } from "@/components/Dashboard";
+import { ConnectTeslaButton } from "@/components/ConnectTeslaButton";
+
+export default function Home() {
+  return (
+    <main className="min-h-screen bg-gradient-to-b from-grid-50 via-white to-slate-50">
+      <header className="mx-auto flex max-w-7xl items-center justify-between px-6 py-6">
+        <div className="flex items-center gap-3">
+          <div className="rounded-2xl bg-slate-950 p-2 text-white">
+            <Zap className="h-5 w-5" />
+          </div>
+          <span className="text-lg font-semibold tracking-tight text-slate-950">GridPilot</span>
+        </div>
+        <a
+          href="#join"
+          className="rounded-full bg-slate-950 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-slate-800"
+        >
+          Join pilot
+        </a>
+      </header>
+
+      <section className="mx-auto grid max-w-7xl gap-12 px-6 pb-14 pt-10 lg:grid-cols-[1.05fr_0.95fr] lg:items-center">
+        <div>
+          <div className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-medium text-grid-900 shadow-sm ring-1 ring-grid-100">
+            <Sparkles className="h-4 w-4 text-grid-600" />
+            Passive EV flexibility rewards
+          </div>
+
+          <h1 className="mt-8 max-w-4xl text-5xl font-semibold tracking-tight text-slate-950 md:text-7xl">
+            Get paid when your EV charging helps the grid.
+          </h1>
+
+          <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-600">
+            Connect your Tesla once. GridPilot learns your charging behavior in the background and rewards flexibility automatically — no daily schedules, no energy trading, no extra work.
+          </p>
+
+          <div id="join" className="mt-8 flex flex-col gap-3 sm:flex-row">
+            <ConnectTeslaButton />
+            <a
+              href="#dashboard"
+              className="inline-flex items-center justify-center rounded-full bg-white px-6 py-3 text-sm font-semibold text-slate-950 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50"
+            >
+              View demo dashboard
+            </a>
+          </div>
+
+          <div className="mt-8 grid gap-3 sm:grid-cols-3">
+            {["Connect once", "Plug in normally", "Earn automatic rewards"].map((item) => (
+              <div key={item} className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                <CheckCircle2 className="h-5 w-5 text-grid-600" />
+                {item}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-[2rem] bg-slate-950 p-4 shadow-2xl">
+          <div className="rounded-[1.5rem] bg-white p-6">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-5">
+              <div>
+                <p className="text-sm text-slate-500">Pilot rewards</p>
+                <p className="mt-1 text-4xl font-semibold tracking-tight text-slate-950">$18.42</p>
+              </div>
+              <div className="rounded-2xl bg-grid-50 p-3 text-grid-600">
+                <WalletCards className="h-7 w-7" />
+              </div>
+            </div>
+
+            <div className="mt-6 space-y-4">
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium text-slate-600">Flexibility score</p>
+                  <p className="text-sm font-semibold text-grid-600">82 / 100</p>
+                </div>
+                <div className="mt-3 h-3 rounded-full bg-slate-200">
+                  <div className="h-3 w-[82%] rounded-full bg-grid-600" />
+                </div>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="rounded-2xl bg-slate-50 p-4">
+                  <PlugZap className="h-5 w-5 text-slate-500" />
+                  <p className="mt-3 text-sm text-slate-500">Shifted</p>
+                  <p className="text-2xl font-semibold text-slate-950">112 kWh</p>
+                </div>
+                <div className="rounded-2xl bg-slate-50 p-4">
+                  <Lock className="h-5 w-5 text-slate-500" />
+                  <p className="mt-3 text-sm text-slate-500">Reliability</p>
+                  <p className="text-2xl font-semibold text-slate-950">91%</p>
+                </div>
+              </div>
+
+              <div className="rounded-2xl bg-grid-50 p-4 text-grid-900">
+                <p className="text-sm font-semibold">Background mode active</p>
+                <p className="mt-1 text-sm">
+                  GridPilot is learning charging behavior and estimating flexibility windows.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="border-y border-slate-200 bg-white">
+        <div className="mx-auto grid max-w-7xl gap-6 px-6 py-12 md:grid-cols-3">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.24em] text-grid-600">Step 1</p>
+            <h3 className="mt-3 text-xl font-semibold text-slate-950">Connect your Tesla</h3>
+            <p className="mt-2 text-slate-600">Users authorize access once through a secure Tesla OAuth flow.</p>
+          </div>
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.24em] text-grid-600">Step 2</p>
+            <h3 className="mt-3 text-xl font-semibold text-slate-950">Plug in normally</h3>
+            <p className="mt-2 text-slate-600">No departure time, urgency profile, or daily settings required.</p>
+          </div>
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.24em] text-grid-600">Step 3</p>
+            <h3 className="mt-3 text-xl font-semibold text-slate-950">Earn rewards</h3>
+            <p className="mt-2 text-slate-600">Rewards appear when flexibility is used, simulated, or validated during pilot events.</p>
+          </div>
+        </div>
+      </section>
+
+      <Dashboard />
+
+      <footer className="border-t border-slate-200 bg-white px-6 py-8">
+        <div className="mx-auto flex max-w-7xl flex-col justify-between gap-3 text-sm text-slate-500 md:flex-row">
+          <p>© 2026 GridPilot. Pilot MVP.</p>
+          <p>Users should always retain manual override and clear consent controls.</p>
+        </div>
+      </footer>
+    </main>
+  );
+}
