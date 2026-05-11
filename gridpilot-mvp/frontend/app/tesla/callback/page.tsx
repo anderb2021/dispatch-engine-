@@ -1,14 +1,18 @@
-"use client";
-
-import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
 
-export default function TeslaCallbackPage() {
-  const params = useSearchParams();
-  const connected = params.get("connected") === "true";
-  const dryRun = params.get("dry_run") === "true";
-  const error = params.get("error");
+export default function TeslaCallbackPage({
+  searchParams,
+}: {
+  searchParams: {
+    connected?: string;
+    dry_run?: string;
+    error?: string;
+  };
+}) {
+  const connected = searchParams.connected === "true";
+  const dryRun = searchParams.dry_run === "true";
+  const error = searchParams.error;
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-slate-50 px-6">
