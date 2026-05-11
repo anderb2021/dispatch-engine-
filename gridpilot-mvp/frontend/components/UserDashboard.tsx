@@ -77,6 +77,7 @@ function StatCard({
 }
 
 type DashboardSummary = {
+  full_name?: string | null;
   email?: string | null;
   reward_balance?: number | null;
   lifetime_rewards?: number | null;
@@ -97,16 +98,35 @@ type SnapshotRow = {
   charging_state?: string | null;
 };
 
+type RewardLedgerRow = {
+  id: string;
+  amount?: number | null;
+  description?: string | null;
+  created_at?: string | null;
+  dispatch_events?:
+    | {
+        event_type?: string | null;
+        verified_kwh_shifted?: number | null;
+      }
+    | {
+        event_type?: string | null;
+        verified_kwh_shifted?: number | null;
+      }[]
+    | null;
+};
+
 export function UserDashboard({
   dashboardSummary,
   vehicle,
   latestSnapshot,
   hasTeslaConnection,
+  recentRewards,
 }: {
   dashboardSummary: DashboardSummary | null;
   vehicle: VehicleRow | null;
   latestSnapshot: SnapshotRow | null;
   hasTeslaConnection: boolean;
+  recentRewards: RewardLedgerRow[];
 }) {
   const [autoFlex, setAutoFlex] = useState(true);
   const [manualOverride, setManualOverride] = useState(true);
@@ -116,7 +136,8 @@ export function UserDashboard({
   const [payoutMethod, setPayoutMethod] = useState("Venmo");
   const [saved, setSaved] = useState(false);
 
-  const firstName = dashboardSummary?.email?.split("@")[0] || "Driver";
+  const displayName = getDisplayName(dashboardSummary?.full_name, dashboardSummary?.email);
+  const firstName = displayName.split(" ")[0];
   const monthlyRewards = Number(dashboardSummary?.month_rewards ?? 0);
   const lifetimeRewards = Number(dashboardSummary?.lifetime_rewards ?? 0);
   const pendingPayout = Number(dashboardSummary?.reward_balance ?? 0);
@@ -128,6 +149,7 @@ export function UserDashboard({
   const battery = latestSnapshot?.battery_level ?? 0;
   const chargingStatus = latestSnapshot?.charging_state || vehicle?.state || "Not connected";
   const controllableKw = Number(vehicle?.controllable_kw ?? 0);
+  const rewardEvents = recentRewards.length > 0 ? recentRewards.map(toRewardEvent) : defaultEvents;
 
   function savePreferences() {
     setSaved(true);
@@ -167,7 +189,7 @@ export function UserDashboard({
         <div className="mb-8 flex flex-col justify-between gap-4 md:flex-row md:items-end">
           <div>
             <p className="text-sm font-semibold uppercase tracking-[0.24em] text-grid-600">
-              User dashboard
+              Dashboard
             </p>
             <h1 className="mt-3 text-4xl font-semibold tracking-tight text-slate-950 md:text-5xl">
               Welcome back, {firstName}.
@@ -313,7 +335,7 @@ export function UserDashboard({
                 </div>
 
                 <div className="mt-5 space-y-3">
-                  {defaultEvents.map((event) => (
+                  {rewardEvents.map((event) => (
                     <div
                       key={event.id}
                       className="flex items-center justify-between gap-4 rounded-2xl bg-slate-50 p-4"
@@ -495,4 +517,38 @@ export function UserDashboard({
       </section>
     </main>
   );
+}
+
+function getDisplayName(fullName?: string | null, email?: string | null) {
+  if (fullName?.trim()) return fullName.trim();
+  if (!email) return "Tesla Driver";
+
+  const local = email.split("@")[0] || "";
+  if (!local || local.startsWith("tesla_")) return "Tesla Driver";
+  return local.replace(/[._-]+/g, " ").trim() || "Tesla Driver";
+}
+
+function toRewardEvent(row: RewardLedgerRow) {
+  const relatedDispatch = Array.isArray(row.dispatch_events)
+    ? row.dispatch_events[0]
+    : row.dispatch_events;
+  const date = row.created_at
+    ? new Date(row.created_at).toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+      })
+    : "Recent";
+
+  const title = row.description?.trim() || relatedDispatch?.event_type || "Flexibility reward";
+  const shifted = Number(relatedDispatch?.verified_kwh_shifted ?? 0);
+  const detail = shifted > 0 ? `${shifted.toFixed(1)} kWh shifted` : "Reward posted";
+  const amount = Number(row.amount ?? 0);
+
+  return {
+    id: row.id,
+    date,
+    title,
+    detail,
+    reward: `$${amount.toFixed(2)}`,
+  };
 }

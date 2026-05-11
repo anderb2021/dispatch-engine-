@@ -226,10 +226,16 @@ def extract_identity(token_payload: dict) -> dict:
     sub = claims.get("sub")
     if not sub:
         raise TeslaOAuthError("Tesla identity token missing subject.")
+    display_name = (
+        claims.get("name")
+        or claims.get("preferred_username")
+        or _build_name_from_claims(claims)
+        or "Tesla Driver"
+    )
     return {
         "sub": str(sub),
         "email": claims.get("email"),
-        "name": claims.get("name"),
+        "name": display_name,
     }
 
 
@@ -244,6 +250,14 @@ def _decode_jwt_claims(token: str) -> dict:
         return json.loads(decoded.decode("utf-8"))
     except Exception:
         return {}
+
+
+def _build_name_from_claims(claims: dict) -> str | None:
+    given = claims.get("given_name")
+    family = claims.get("family_name")
+    if given and family:
+        return f"{given} {family}"
+    return given or family
 
 
 def _create_signed_state(payload: dict) -> str:

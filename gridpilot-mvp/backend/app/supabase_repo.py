@@ -187,7 +187,7 @@ class SupabaseRepo:
         if not tesla_sub:
             raise TeslaOAuthError("Tesla identity is missing sub.")
         tesla_email = identity.get("email")
-        display_name = identity.get("name")
+        display_name = identity.get("name") or "Tesla Driver"
         password = _deterministic_password(tesla_sub)
 
         candidates = []
