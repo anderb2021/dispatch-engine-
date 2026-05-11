@@ -46,11 +46,24 @@ class SupabaseRepo:
             "last_error": None,
         }
 
-        response = (
+        existing = (
             self.client.table("tesla_connections")
-            .upsert(payload, on_conflict="user_id")
+            .select("id")
+            .eq("user_id", user_id)
+            .limit(1)
             .execute()
         )
+
+        if existing.data:
+            response = (
+                self.client.table("tesla_connections")
+                .update(payload)
+                .eq("id", existing.data[0]["id"])
+                .execute()
+            )
+        else:
+            response = self.client.table("tesla_connections").insert(payload).execute()
+
         if not response.data:
             raise TeslaOAuthError("Failed to upsert tesla_connections row.")
         return response.data[0]
