@@ -7,3 +7,4 @@ cryptography
 sqlalchemy
 psycopg2-binary
 apscheduler
+supabase

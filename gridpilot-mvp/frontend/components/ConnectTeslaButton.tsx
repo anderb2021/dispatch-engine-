@@ -1,12 +1,14 @@
 "use client";
 
 import { ArrowRight } from "lucide-react";
+import { trackButtonClick } from "@/lib/metaPixel";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8001";
 
 export function ConnectTeslaButton() {
   function connectTesla() {
-    window.location.href = `${API_BASE}/auth/tesla/redirect`;
+    trackButtonClick("connect_tesla");
+    window.location.href = `${API_BASE}/auth/tesla/login/redirect?next=${encodeURIComponent("/dashboard")}`;
   }
 
   return (
