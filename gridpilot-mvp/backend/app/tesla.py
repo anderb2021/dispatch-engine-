@@ -114,6 +114,10 @@ def exchange_code_for_token(code: str, state: str) -> dict:
         TOKEN_STORE[user_id] = token_payload
     return token_payload
 
+
+def get_state_context(state: str) -> dict | None:
+    return _verify_signed_state(state)
+
 def refresh_access_token(refresh_token: str) -> dict:
     if config.DRY_RUN:
         token_payload = {

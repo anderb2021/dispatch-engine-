@@ -9,6 +9,7 @@ from .tesla import (
     build_authorize_url,
     exchange_code_for_token,
     extract_identity,
+    get_state_context,
     get_vehicle_data,
     refresh_access_token,
     list_vehicles,
@@ -66,9 +67,17 @@ def tesla_callback(
     code: str = Query(...),
     state: str = Query(...),
 ):
+    state_context = get_state_context(state) or {}
+    purpose = state_context.get("purpose", "connect")
+    error_redirect_base = (
+        config.FRONTEND_TESLA_LOGIN_CALLBACK_URL
+        if purpose == "login"
+        else config.FRONTEND_CALLBACK_URL
+    )
+
     try:
         token_payload = exchange_code_for_token(code=code, state=state)
-        purpose = token_payload.get("purpose", "connect")
+        purpose = token_payload.get("purpose", purpose)
         repo = SupabaseRepo()
 
         if purpose == "login":
@@ -94,8 +103,14 @@ def tesla_callback(
             f"{config.FRONTEND_CALLBACK_URL}?connected=true&dry_run={str(token_payload.get('dry_run', False)).lower()}"
         )
     except TeslaOAuthError as exc:
+        error_message = quote(str(exc), safe="")
         return RedirectResponse(
-            f"{config.FRONTEND_CALLBACK_URL}?connected=false&error={str(exc)}"
+            f"{error_redirect_base}?connected=false&error={error_message}"
+        )
+    except Exception as exc:
+        error_message = quote(f"Unexpected callback error: {exc}", safe="")
+        return RedirectResponse(
+            f"{error_redirect_base}?connected=false&error={error_message}"
         )
 
 @app.post("/auth/tesla/refresh")
