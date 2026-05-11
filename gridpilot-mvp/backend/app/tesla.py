@@ -1,11 +1,13 @@
 import secrets
 import base64
 import json
+import hashlib
+import hmac
+import time
 from urllib.parse import urlencode
 import requests
 from . import config
 
-STATE_STORE = {}
 TOKEN_STORE = {}
 
 DEFAULT_SCOPES = [
@@ -29,12 +31,14 @@ def build_authorize_url(
     if purpose not in {"connect", "login"}:
         raise TeslaOAuthError("Invalid Tesla OAuth purpose.")
 
-    state = secrets.token_urlsafe(32)
-    STATE_STORE[state] = {
-        "user_id": user_id,
-        "purpose": purpose,
-        "next_path": next_path if next_path.startswith("/") else "/dashboard",
-    }
+    state = _create_signed_state(
+        {
+            "user_id": user_id,
+            "purpose": purpose,
+            "next_path": next_path if next_path.startswith("/") else "/dashboard",
+            "nonce": secrets.token_urlsafe(16),
+        }
+    )
 
     params = {
         "response_type": "code",
@@ -55,11 +59,9 @@ def build_authorize_url(
     }
 
 def exchange_code_for_token(code: str, state: str) -> dict:
-    state_data = STATE_STORE.get(state)
+    state_data = _verify_signed_state(state)
     if not state_data:
         raise TeslaOAuthError("Invalid OAuth state. Restart the connection flow.")
-
-    del STATE_STORE[state]
     user_id = state_data.get("user_id")
     purpose = state_data.get("purpose", "connect")
     next_path = state_data.get("next_path", "/dashboard")
@@ -238,3 +240,49 @@ def _decode_jwt_claims(token: str) -> dict:
         return json.loads(decoded.decode("utf-8"))
     except Exception:
         return {}
+
+
+def _create_signed_state(payload: dict) -> str:
+    now = int(time.time())
+    envelope = {
+        **payload,
+        "iat": now,
+        "exp": now + 900,  # 15 minutes
+    }
+    body = json.dumps(envelope, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    body_b64 = _b64url_encode(body)
+    signature = _state_signature(body_b64.encode("utf-8"))
+    return f"{body_b64}.{_b64url_encode(signature)}"
+
+
+def _verify_signed_state(state: str) -> dict | None:
+    try:
+        body_b64, sig_b64 = state.split(".", 1)
+    except ValueError:
+        return None
+    expected_sig = _state_signature(body_b64.encode("utf-8"))
+    given_sig = _b64url_decode(sig_b64)
+    if not hmac.compare_digest(expected_sig, given_sig):
+        return None
+    try:
+        payload = json.loads(_b64url_decode(body_b64).decode("utf-8"))
+    except Exception:
+        return None
+    now = int(time.time())
+    if int(payload.get("exp", 0)) < now:
+        return None
+    return payload
+
+
+def _state_signature(data: bytes) -> bytes:
+    secret = (config.SECRET_KEY or "gridpilot-oauth-state").encode("utf-8")
+    return hmac.new(secret, data, hashlib.sha256).digest()
+
+
+def _b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("utf-8").rstrip("=")
+
+
+def _b64url_decode(data: str) -> bytes:
+    padding = "=" * ((4 - len(data) % 4) % 4)
+    return base64.urlsafe_b64decode(data + padding)
