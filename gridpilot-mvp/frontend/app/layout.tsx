@@ -3,9 +3,36 @@ import Script from "next/script";
 import "./globals.css";
 import { MetaPixelPageView } from "@/components/MetaPixelPageView";
 
+const siteUrl =
+  process.env.NEXT_PUBLIC_SITE_URL ||
+  (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "https://www.joingridpilot.com");
+
 export const metadata: Metadata = {
   title: "GridPilot",
   description: "Earn rewards automatically when your EV charging helps the grid.",
+  metadataBase: new URL(siteUrl),
+  openGraph: {
+    title: "GridPilot",
+    description: "Earn rewards automatically when your EV charging helps the grid.",
+    url: siteUrl,
+    siteName: "GridPilot",
+    images: [
+      {
+        url: "/social-preview.png?v=2",
+        width: 1024,
+        height: 512,
+        alt: "GridPilot",
+      },
+    ],
+    locale: "en_US",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "GridPilot",
+    description: "Earn rewards automatically when your EV charging helps the grid.",
+    images: ["/social-preview.png?v=2"],
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
