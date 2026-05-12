@@ -23,6 +23,7 @@ import {
 import { logoutUser } from "@/lib/auth";
 import { BrandLogo } from "@/components/BrandLogo";
 import { createClient } from "@/utils/supabase/client";
+import { trackButtonClick, trackCompleteRegistration } from "@/lib/metaPixel";
 
 const defaultEvents = [
     {
@@ -179,6 +180,11 @@ export function UserDashboard({
   const controllableKw = Number(vehicle?.controllable_kw ?? 0);
   const rewardEvents = recentRewards.length > 0 ? recentRewards.map(toRewardEvent) : defaultEvents;
 
+  function handleTeslaConnectClick() {
+    trackButtonClick("connect_tesla_dashboard");
+    trackCompleteRegistration();
+  }
+
   async function savePreferences() {
     if (isSaving) return;
     setSaveError(null);
@@ -236,6 +242,7 @@ export function UserDashboard({
           ) : (
             <a
               href="/tesla/connect"
+              onClick={handleTeslaConnectClick}
               className="inline-flex items-center gap-2 rounded-full bg-grid-600 px-4 py-2 text-xs font-medium text-white shadow-sm transition hover:bg-grid-500 sm:text-sm"
             >
               Connect Tesla

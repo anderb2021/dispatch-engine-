@@ -3,7 +3,7 @@
 import { FormEvent, useState } from "react";
 import { ArrowRight, Car, Mail, Lock } from "lucide-react";
 import { loginWithEmail, loginWithGoogle } from "@/lib/auth";
-import { trackButtonClick } from "@/lib/metaPixel";
+import { trackButtonClick, trackCompleteRegistration } from "@/lib/metaPixel";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8001";
 
@@ -18,6 +18,8 @@ export function HomeSignInCard() {
     setErrorMessage(null);
     setIsLoading(true);
     try {
+      trackButtonClick("sign_in_with_email");
+      trackCompleteRegistration();
       await loginWithEmail(email, password, "/dashboard");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to sign in.";
@@ -31,6 +33,7 @@ export function HomeSignInCard() {
     setIsLoading(true);
     try {
       trackButtonClick("continue_with_google");
+      trackCompleteRegistration();
       await loginWithGoogle("/dashboard");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Google sign-in failed.";
@@ -43,6 +46,7 @@ export function HomeSignInCard() {
     setErrorMessage(null);
     setIsLoading(true);
     trackButtonClick("continue_with_tesla");
+    trackCompleteRegistration();
     window.location.href = `${API_BASE}/auth/tesla/login/redirect?next=${encodeURIComponent("/dashboard")}&allow_charging_management=true`;
   }
 

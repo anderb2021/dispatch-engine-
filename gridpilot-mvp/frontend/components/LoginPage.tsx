@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { loginWithEmail, loginWithGoogle } from "@/lib/auth";
 import { BrandLogo } from "@/components/BrandLogo";
+import { trackButtonClick, trackCompleteRegistration } from "@/lib/metaPixel";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8001";
 
@@ -54,6 +55,8 @@ export function LoginPage() {
     setErrorMessage(null);
     setIsLoading(true);
     try {
+      trackButtonClick("sign_in_with_email");
+      trackCompleteRegistration();
       await loginWithEmail(email, password, nextPath);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to sign in.";
@@ -66,6 +69,8 @@ export function LoginPage() {
     setErrorMessage(null);
     setIsLoading(true);
     try {
+      trackButtonClick("continue_with_google");
+      trackCompleteRegistration();
       await loginWithGoogle(nextPath);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Google sign-in failed.";
@@ -77,6 +82,8 @@ export function LoginPage() {
   function handleTeslaLogin() {
     setErrorMessage(null);
     setIsLoading(true);
+    trackButtonClick("continue_with_tesla");
+    trackCompleteRegistration();
     window.location.href = `${API_BASE}/auth/tesla/login/redirect?next=${encodeURIComponent(nextPath)}&allow_charging_management=true`;
   }
 
