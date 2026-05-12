@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { logoutUser } from "@/lib/auth";
 import { BrandLogo } from "@/components/BrandLogo";
+import { createClient } from "@/utils/supabase/client";
 
 const defaultEvents = [
     {
@@ -115,26 +116,53 @@ type RewardLedgerRow = {
     | null;
 };
 
+type ParticipantPreferenceRow = {
+  auto_flex_enabled?: boolean | null;
+  manual_override_enabled?: boolean | null;
+  reward_notifications_enabled?: boolean | null;
+  minimum_battery_floor?: number | null;
+  max_delay_hours?: number | null;
+  payout_method?: string | null;
+};
+
+const payoutOptions = [
+  { value: "manual", label: "Manual" },
+  { value: "venmo", label: "Venmo" },
+  { value: "paypal", label: "PayPal" },
+  { value: "ach", label: "ACH bank transfer" },
+  { value: "statement_credit", label: "Statement credit" },
+  { value: "gift_card", label: "Gift card" },
+];
+
 export function UserDashboard({
   dashboardSummary,
   vehicle,
   latestSnapshot,
   hasTeslaConnection,
   recentRewards,
+  initialPreferences,
 }: {
   dashboardSummary: DashboardSummary | null;
   vehicle: VehicleRow | null;
   latestSnapshot: SnapshotRow | null;
   hasTeslaConnection: boolean;
   recentRewards: RewardLedgerRow[];
+  initialPreferences: ParticipantPreferenceRow | null;
 }) {
-  const [autoFlex, setAutoFlex] = useState(true);
-  const [manualOverride, setManualOverride] = useState(true);
-  const [rewardNotifications, setRewardNotifications] = useState(true);
-  const [minimumBattery, setMinimumBattery] = useState(45);
-  const [maxDelay, setMaxDelay] = useState(4);
-  const [payoutMethod, setPayoutMethod] = useState("Venmo");
+  const supabase = createClient();
+  const [autoFlex, setAutoFlex] = useState(Boolean(initialPreferences?.auto_flex_enabled ?? true));
+  const [manualOverride, setManualOverride] = useState(Boolean(initialPreferences?.manual_override_enabled ?? true));
+  const [rewardNotifications, setRewardNotifications] = useState(
+    Boolean(initialPreferences?.reward_notifications_enabled ?? true)
+  );
+  const [minimumBattery, setMinimumBattery] = useState(
+    Number(initialPreferences?.minimum_battery_floor ?? 45)
+  );
+  const [maxDelay, setMaxDelay] = useState(Number(initialPreferences?.max_delay_hours ?? 4));
+  const [payoutMethod, setPayoutMethod] = useState(normalizePayoutMethod(initialPreferences?.payout_method));
   const [saved, setSaved] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const displayName = getDisplayName(dashboardSummary?.full_name, dashboardSummary?.email);
   const firstName = displayName.split(" ")[0];
@@ -151,9 +179,47 @@ export function UserDashboard({
   const controllableKw = Number(vehicle?.controllable_kw ?? 0);
   const rewardEvents = recentRewards.length > 0 ? recentRewards.map(toRewardEvent) : defaultEvents;
 
-  function savePreferences() {
-    setSaved(true);
-    setTimeout(() => setSaved(false), 1800);
+  async function savePreferences() {
+    if (isSaving) return;
+    setSaveError(null);
+    setIsSaving(true);
+
+    try {
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
+
+      if (authError || !user) {
+        throw new Error("Please sign in again to save preferences.");
+      }
+
+      const { error } = await supabase.from("participant_preferences").upsert(
+        {
+          user_id: user.id,
+          auto_flex_enabled: autoFlex,
+          manual_override_enabled: manualOverride,
+          reward_notifications_enabled: rewardNotifications,
+          minimum_battery_floor: minimumBattery,
+          max_delay_hours: maxDelay,
+          payout_method: payoutMethod,
+        },
+        { onConflict: "user_id" }
+      );
+
+      if (error) {
+        throw new Error(error.message || "Could not save preferences.");
+      }
+
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1800);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to save preferences.";
+      setSaveError(message);
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   return (
@@ -201,10 +267,11 @@ export function UserDashboard({
 
           <button
             onClick={savePreferences}
+            disabled={isSaving}
             className="inline-flex items-center justify-center gap-2 rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
           >
             <Save className="h-4 w-4" />
-            {saved ? "Preferences saved" : "Save preferences"}
+            {isSaving ? "Saving..." : saved ? "Preferences saved" : "Save preferences"}
           </button>
         </div>
 
@@ -445,11 +512,11 @@ export function UserDashboard({
                   onChange={(e) => setPayoutMethod(e.target.value)}
                   className="mt-3 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-medium text-slate-950 outline-none ring-grid-600 focus:ring-2"
                 >
-                  <option>Venmo</option>
-                  <option>PayPal</option>
-                  <option>ACH bank transfer</option>
-                  <option>Statement credit</option>
-                  <option>Gift card</option>
+                  {payoutOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -501,11 +568,16 @@ export function UserDashboard({
 
               <button
                 onClick={savePreferences}
+                disabled={isSaving}
                 className="flex w-full items-center justify-center gap-2 rounded-full bg-grid-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-grid-500"
               >
                 <Save className="h-4 w-4" />
-                {saved ? "Saved" : "Save all preferences"}
+                {isSaving ? "Saving..." : saved ? "Saved" : "Save all preferences"}
               </button>
+
+              {saveError ? (
+                <p className="text-xs leading-5 text-rose-700">{saveError}</p>
+              ) : null}
 
               <p className="text-xs leading-5 text-slate-500">
                 These are user-facing guardrails. The behavior engine should still infer
@@ -551,4 +623,12 @@ function toRewardEvent(row: RewardLedgerRow) {
     detail,
     reward: `$${amount.toFixed(2)}`,
   };
+}
+
+function normalizePayoutMethod(value?: string | null) {
+  if (!value) return "manual";
+  const normalized = value.trim().toLowerCase();
+  return payoutOptions.some((option) => option.value === normalized)
+    ? normalized
+    : "manual";
 }

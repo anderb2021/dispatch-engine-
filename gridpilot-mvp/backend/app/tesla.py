@@ -22,7 +22,10 @@ class TeslaOAuthError(Exception):
     pass
 
 def build_authorize_url(
-    user_id: str | None = None, purpose: str = "connect", next_path: str = "/dashboard"
+    user_id: str | None = None,
+    purpose: str = "connect",
+    next_path: str = "/dashboard",
+    allow_charging_management: bool = True,
 ) -> dict:
     if not config.TESLA_CLIENT_ID:
         raise TeslaOAuthError("Missing TESLA_CLIENT_ID in backend .env")
@@ -36,6 +39,7 @@ def build_authorize_url(
             "user_id": user_id,
             "purpose": purpose,
             "next_path": next_path if next_path.startswith("/") else "/dashboard",
+            "allow_charging_management": bool(allow_charging_management),
             "nonce": secrets.token_urlsafe(16),
         }
     )
@@ -110,6 +114,9 @@ def exchange_code_for_token(code: str, state: str) -> dict:
     token_payload["user_id"] = user_id
     token_payload["purpose"] = purpose
     token_payload["next_path"] = next_path
+    token_payload["allow_charging_management"] = bool(
+        state_data.get("allow_charging_management", True)
+    )
     if user_id:
         TOKEN_STORE[user_id] = token_payload
     return token_payload

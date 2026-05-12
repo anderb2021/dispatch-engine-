@@ -14,7 +14,14 @@ export default async function DashboardPage() {
     redirect("/login");
   }
 
-  const [{ data: summary }, { data: vehicleRows }, { data: snapshotRows }, { data: teslaRows }, { data: rewardRows }] =
+  const [
+    { data: summary },
+    { data: vehicleRows },
+    { data: snapshotRows },
+    { data: teslaRows },
+    { data: rewardRows },
+    { data: preferenceRows },
+  ] =
     await Promise.all([
       supabase.from("user_dashboard_summary").select("*").eq("user_id", user.id).limit(1),
       supabase.from("vehicles").select("*").eq("user_id", user.id).eq("is_active", true).limit(1),
@@ -38,6 +45,13 @@ export default async function DashboardPage() {
         .eq("user_id", user.id)
         .order("created_at", { ascending: false })
         .limit(5),
+      supabase
+        .from("participant_preferences")
+        .select(
+          "auto_flex_enabled,manual_override_enabled,reward_notifications_enabled,minimum_battery_floor,max_delay_hours,payout_method"
+        )
+        .eq("user_id", user.id)
+        .limit(1),
     ]);
 
   return (
@@ -47,6 +61,7 @@ export default async function DashboardPage() {
       latestSnapshot={snapshotRows?.[0] ?? null}
       hasTeslaConnection={Boolean(teslaRows?.length)}
       recentRewards={rewardRows ?? []}
+      initialPreferences={preferenceRows?.[0] ?? null}
     />
   );
 }

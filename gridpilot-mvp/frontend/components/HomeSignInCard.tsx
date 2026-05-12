@@ -43,7 +43,7 @@ export function HomeSignInCard() {
     setErrorMessage(null);
     setIsLoading(true);
     trackButtonClick("continue_with_tesla");
-    window.location.href = `${API_BASE}/auth/tesla/login/redirect?next=${encodeURIComponent("/dashboard")}`;
+    window.location.href = `${API_BASE}/auth/tesla/login/redirect?next=${encodeURIComponent("/dashboard")}&allow_charging_management=true`;
   }
 
   return (

@@ -68,6 +68,23 @@ class SupabaseRepo:
             raise TeslaOAuthError("Failed to upsert tesla_connections row.")
         return response.data[0]
 
+    def upsert_participant_preferences(
+        self, user_id: str, allow_charging_management: bool
+    ) -> dict[str, Any]:
+        payload = {
+            "user_id": user_id,
+            "auto_flex_enabled": bool(allow_charging_management),
+            "manual_override_enabled": True,
+        }
+        response = (
+            self.client.table("participant_preferences")
+            .upsert(payload, on_conflict="user_id")
+            .execute()
+        )
+        if not response.data:
+            raise TeslaOAuthError("Failed to save participant preferences.")
+        return response.data[0]
+
     def get_tesla_connection(self, user_id: str) -> dict[str, Any]:
         response = (
             self.client.table("tesla_connections")

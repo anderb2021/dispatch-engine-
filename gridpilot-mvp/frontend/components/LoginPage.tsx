@@ -77,7 +77,7 @@ export function LoginPage() {
   function handleTeslaLogin() {
     setErrorMessage(null);
     setIsLoading(true);
-    window.location.href = `${API_BASE}/auth/tesla/login/redirect?next=${encodeURIComponent(nextPath)}`;
+    window.location.href = `${API_BASE}/auth/tesla/login/redirect?next=${encodeURIComponent(nextPath)}&allow_charging_management=true`;
   }
 
   return (

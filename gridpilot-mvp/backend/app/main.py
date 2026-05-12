@@ -16,6 +16,8 @@ from .tesla import (
 )
 from .supabase_repo import SupabaseRepo
 
+REQUIRED_TESLA_SCOPES = {"vehicle_charging_cmds"}
+
 app = FastAPI(title="GridPilot EBON API")
 
 app.add_middleware(
@@ -45,19 +47,53 @@ def tesla_start(user_id: str = Query(...)):
     except TeslaOAuthError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+def _extract_scopes(token_payload: dict) -> set[str]:
+    raw_scopes = token_payload.get("scope") or token_payload.get("scopes") or []
+    if isinstance(raw_scopes, str):
+        return {scope for scope in raw_scopes.split() if scope}
+    if isinstance(raw_scopes, list):
+        return {str(scope).strip() for scope in raw_scopes if str(scope).strip()}
+    return set()
+
+
+def _enforce_required_tesla_scopes(token_payload: dict):
+    granted = _extract_scopes(token_payload)
+    missing = REQUIRED_TESLA_SCOPES - granted
+    if missing:
+        raise TeslaOAuthError(
+            "Tesla connection is missing required permissions: "
+            + ", ".join(sorted(missing))
+            + ". Please approve charging management in Tesla and try again."
+        )
+
+
 @app.get("/auth/tesla/redirect")
-def tesla_redirect(user_id: str = Query(...)):
+def tesla_redirect(
+    user_id: str = Query(...),
+    allow_charging_management: bool = Query(True),
+):
     try:
-        data = build_authorize_url(user_id=user_id, purpose="connect")
+        data = build_authorize_url(
+            user_id=user_id,
+            purpose="connect",
+            allow_charging_management=allow_charging_management,
+        )
         return RedirectResponse(data["url"])
     except TeslaOAuthError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.get("/auth/tesla/login/redirect")
-def tesla_login_redirect(next: str = Query("/dashboard")):
+def tesla_login_redirect(
+    next: str = Query("/dashboard"),
+    allow_charging_management: bool = Query(True),
+):
     try:
-        data = build_authorize_url(purpose="login", next_path=next)
+        data = build_authorize_url(
+            purpose="login",
+            next_path=next,
+            allow_charging_management=allow_charging_management,
+        )
         return RedirectResponse(data["url"])
     except TeslaOAuthError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -77,7 +113,11 @@ def tesla_callback(
 
     try:
         token_payload = exchange_code_for_token(code=code, state=state)
+        _enforce_required_tesla_scopes(token_payload)
         purpose = token_payload.get("purpose", purpose)
+        allow_charging_management = bool(
+            token_payload.get("allow_charging_management", True)
+        )
         repo = SupabaseRepo()
 
         if purpose == "login":
@@ -88,6 +128,10 @@ def tesla_callback(
                 raise TeslaOAuthError("Tesla login did not return a user id.")
 
             repo.upsert_tesla_connection(user_id=user_id, token_payload=token_payload)
+            repo.upsert_participant_preferences(
+                user_id=user_id,
+                allow_charging_management=allow_charging_management,
+            )
             access_token = quote(login_session.get("access_token") or "", safe="")
             refresh_token = quote(login_session.get("refresh_token") or "", safe="")
             next_path = quote(token_payload.get("next_path", "/dashboard"), safe="/")
@@ -99,6 +143,10 @@ def tesla_callback(
         if not user_id:
             raise TeslaOAuthError("Missing user_id in OAuth callback payload.")
         repo.upsert_tesla_connection(user_id=user_id, token_payload=token_payload)
+        repo.upsert_participant_preferences(
+            user_id=user_id,
+            allow_charging_management=allow_charging_management,
+        )
         return RedirectResponse(
             f"{config.FRONTEND_CALLBACK_URL}?connected=true&dry_run={str(token_payload.get('dry_run', False)).lower()}"
         )

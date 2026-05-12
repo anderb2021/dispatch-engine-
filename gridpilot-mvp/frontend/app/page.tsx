@@ -9,7 +9,7 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-gradient-to-b from-grid-50 via-white to-slate-50">
       <header className="mx-auto flex max-w-7xl items-center justify-between px-6 py-6">
-        <BrandLogo />
+        <BrandLogo imageClassName="h-14 w-auto sm:h-[6.25rem]" />
         <HomeHeaderActions />
       </header>
 

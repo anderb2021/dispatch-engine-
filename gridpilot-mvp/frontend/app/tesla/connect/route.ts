@@ -16,6 +16,6 @@ export async function GET(request: Request) {
   }
 
   return NextResponse.redirect(
-    `${API_BASE}/auth/tesla/redirect?user_id=${encodeURIComponent(user.id)}`
+    `${API_BASE}/auth/tesla/redirect?user_id=${encodeURIComponent(user.id)}&allow_charging_management=true`
   );
 }
