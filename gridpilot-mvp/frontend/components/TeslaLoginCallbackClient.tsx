@@ -2,38 +2,52 @@
 
 import { useEffect, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
+import { trackCompleteRegistration } from "@/lib/metaPixel";
 
 export function TeslaLoginCallbackClient({
   accessToken,
   refreshToken,
   nextPath,
+  callbackError,
 }: {
   accessToken?: string;
   refreshToken?: string;
   nextPath: string;
+  callbackError?: string;
 }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     async function finishTeslaLogin() {
-      if (!accessToken || !refreshToken) {
+      const params = new URLSearchParams(window.location.search);
+      const resolvedAccessToken = accessToken || params.get("access_token") || undefined;
+      const resolvedRefreshToken = refreshToken || params.get("refresh_token") || undefined;
+      const resolvedError = callbackError || params.get("error") || undefined;
+
+      if (resolvedError) {
+        setError(resolvedError);
+        return;
+      }
+
+      if (!resolvedAccessToken || !resolvedRefreshToken) {
         setError("Tesla login callback is missing a session token.");
         return;
       }
       const supabase = createClient();
       const { error: sessionError } = await supabase.auth.setSession({
-        access_token: accessToken,
-        refresh_token: refreshToken,
+        access_token: resolvedAccessToken,
+        refresh_token: resolvedRefreshToken,
       });
       if (sessionError) {
         setError(sessionError.message);
         return;
       }
+      trackCompleteRegistration();
       window.location.href = nextPath;
     }
 
     finishTeslaLogin();
-  }, [accessToken, refreshToken, nextPath]);
+  }, [accessToken, refreshToken, nextPath, callbackError]);
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-slate-50 px-6">
