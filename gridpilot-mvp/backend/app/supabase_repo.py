@@ -199,6 +199,203 @@ class SupabaseRepo:
             raise TeslaOAuthError("No dashboard summary found for this user.")
         return response.data[0]
 
+    def validate_admin_access_token(self, access_token: str) -> str:
+        if not access_token:
+            raise TeslaOAuthError("Missing access token.")
+
+        try:
+            user_response = self.auth_client.auth.get_user(access_token)
+        except Exception as exc:
+            raise TeslaOAuthError("Invalid Supabase access token.") from exc
+
+        user = getattr(user_response, "user", None)
+        user_id = getattr(user, "id", None)
+        if not user_id:
+            raise TeslaOAuthError("Supabase token did not contain a user id.")
+
+        profile_response = (
+            self.client.table("profiles")
+            .select("id,role")
+            .eq("id", user_id)
+            .limit(1)
+            .execute()
+        )
+        profile = (profile_response.data or [{}])[0]
+        if profile.get("role") != "admin":
+            raise TeslaOAuthError("Admin role required.")
+
+        return str(user_id)
+
+    def get_admin_telemetry(self) -> dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        week_start = now - timedelta(days=7)
+
+        profiles = self._safe_select(
+            "profiles",
+            "id,full_name,email,created_at",
+            order_column="created_at",
+            descending=True,
+            limit=5000,
+        )
+        vehicles = self._safe_select(
+            "vehicles",
+            "id,user_id,display_name,model,state,controllable_kw,is_active",
+            eq_filters={"is_active": True},
+            limit=5000,
+        )
+        snapshots = self._safe_select(
+            "vehicle_snapshots",
+            "id,user_id,battery_level,charging_state,plugged_in,charger_power_kw,captured_at",
+            order_column="captured_at",
+            descending=True,
+            limit=5000,
+        )
+        rewards = self._safe_select(
+            "reward_ledger",
+            "id,user_id,amount,created_at",
+            order_column="created_at",
+            descending=True,
+            limit=5000,
+        )
+        dispatch_events = self._safe_select(
+            "dispatch_events",
+            "id,event_type,status,verified_kw,verified_kwh_shifted,reward_amount,created_at",
+            order_column="created_at",
+            descending=True,
+            limit=100,
+        )
+        summary_rows = self._safe_select(
+            "user_dashboard_summary",
+            "user_id,dispatch_reliability,flexibility_score",
+            limit=5000,
+        )
+
+        active_users = len({row.get("id") for row in profiles if row.get("id")})
+        signup_total = active_users
+        signup_last_7_days = sum(
+            1 for row in profiles if _is_after(row.get("created_at"), week_start)
+        )
+        connected_vehicles = len(vehicles)
+        controllable_kw = sum(_to_float(row.get("controllable_kw")) for row in vehicles)
+        flexible_kwh = sum(
+            _to_float(row.get("charger_power_kw")) for row in snapshots if row.get("plugged_in")
+        )
+
+        dispatch_reliability_values = [
+            _to_float(row.get("dispatch_reliability"))
+            for row in summary_rows
+            if row.get("dispatch_reliability") is not None
+        ]
+        dispatch_reliability = _avg(dispatch_reliability_values)
+
+        flex_score_values = [
+            _to_float(row.get("flexibility_score"))
+            for row in summary_rows
+            if row.get("flexibility_score") is not None
+        ]
+        avg_flex_score = _avg(flex_score_values)
+
+        monthly_reward_liability = sum(
+            _to_float(row.get("amount"))
+            for row in rewards
+            if _is_after(row.get("created_at"), month_start)
+        )
+        shifted_kwh_month = sum(
+            _to_float(row.get("verified_kwh_shifted"))
+            for row in dispatch_events
+            if _is_after(row.get("created_at"), month_start)
+        )
+
+        latest_snapshot_by_user: dict[str, dict[str, Any]] = {}
+        for snapshot in snapshots:
+            user_id = snapshot.get("user_id")
+            if user_id and user_id not in latest_snapshot_by_user:
+                latest_snapshot_by_user[user_id] = snapshot
+
+        vehicle_by_user: dict[str, dict[str, Any]] = {}
+        for vehicle in vehicles:
+            user_id = vehicle.get("user_id")
+            if user_id and user_id not in vehicle_by_user:
+                vehicle_by_user[user_id] = vehicle
+
+        summary_by_user = {
+            row.get("user_id"): row
+            for row in summary_rows
+            if row.get("user_id")
+        }
+
+        reward_by_user_this_month: dict[str, float] = {}
+        for row in rewards:
+            user_id = row.get("user_id")
+            if not user_id or not _is_after(row.get("created_at"), month_start):
+                continue
+            reward_by_user_this_month[user_id] = reward_by_user_this_month.get(user_id, 0.0) + _to_float(
+                row.get("amount")
+            )
+
+        users: list[dict[str, Any]] = []
+        for profile in profiles[:200]:
+            user_id = profile.get("id")
+            if not user_id:
+                continue
+            vehicle = vehicle_by_user.get(user_id, {})
+            snapshot = latest_snapshot_by_user.get(user_id, {})
+            summary = summary_by_user.get(user_id, {})
+
+            users.append(
+                {
+                    "id": _admin_user_id(user_id),
+                    "name": _display_name(
+                        profile.get("full_name"),
+                        profile.get("email"),
+                    ),
+                    "vehicle": vehicle.get("display_name")
+                    or vehicle.get("model")
+                    or "No vehicle",
+                    "battery": round(_to_float(snapshot.get("battery_level"))),
+                    "status": snapshot.get("charging_state")
+                    or vehicle.get("state")
+                    or "Unknown",
+                    "flexScore": round(_to_float(summary.get("flexibility_score"))),
+                    "reliability": round(_to_float(summary.get("dispatch_reliability"))),
+                    "rewards": round(reward_by_user_this_month.get(user_id, 0.0), 2),
+                    "controllableKw": round(_to_float(vehicle.get("controllable_kw")), 1),
+                }
+            )
+
+        events = [
+            {
+                "id": str(event.get("id") or f"D-{idx + 1}"),
+                "time": event.get("created_at") or "Recent",
+                "type": event.get("event_type") or "Dispatch event",
+                "users": active_users,
+                "kw": round(_to_float(event.get("verified_kw")), 1),
+                "kwh": round(_to_float(event.get("verified_kwh_shifted")), 1),
+                "rewards": round(_to_float(event.get("reward_amount")), 2),
+                "status": event.get("status") or "Completed",
+            }
+            for idx, event in enumerate(dispatch_events[:20])
+        ]
+
+        return {
+            "network": {
+                "activeUsers": active_users,
+                "signupsTotal": signup_total,
+                "signupsLast7Days": signup_last_7_days,
+                "connectedVehicles": connected_vehicles,
+                "controllableKw": round(controllable_kw, 1),
+                "flexibleKwh": round(flexible_kwh, 1),
+                "dispatchReliability": round(dispatch_reliability),
+                "monthlyRewardLiability": round(monthly_reward_liability, 2),
+                "shiftedKwhMonth": round(shifted_kwh_month, 1),
+                "avgFlexScore": round(avg_flex_score),
+            },
+            "users": users,
+            "events": events,
+            "generatedAt": now.isoformat(),
+        }
+
     def sign_in_from_tesla_identity(self, identity: dict[str, Any]) -> dict[str, Any]:
         tesla_sub = identity.get("sub")
         if not tesla_sub:
@@ -277,6 +474,30 @@ class SupabaseRepo:
         except Exception:
             return None
 
+    def _safe_select(
+        self,
+        table_name: str,
+        columns: str,
+        *,
+        eq_filters: dict[str, Any] | None = None,
+        order_column: str | None = None,
+        descending: bool = False,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        try:
+            query = self.client.table(table_name).select(columns)
+            if eq_filters:
+                for key, value in eq_filters.items():
+                    query = query.eq(key, value)
+            if order_column:
+                query = query.order(order_column, desc=descending)
+            if limit:
+                query = query.limit(limit)
+            response = query.execute()
+            return response.data or []
+        except Exception:
+            return []
+
 
 def vehicle_state_to_odometer(response_data: dict[str, Any]) -> float | None:
     vehicle_state = response_data.get("vehicle_state") or {}
@@ -290,3 +511,53 @@ def _deterministic_password(seed: str) -> str:
     digest = hmac.new(key, message, hashlib.sha256).digest()
     token = base64.urlsafe_b64encode(digest).decode("utf-8").rstrip("=")
     return f"Tsla!{token[:40]}"
+
+
+def _to_float(value: Any) -> float:
+    try:
+        if value is None:
+            return 0.0
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _avg(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    return sum(values) / len(values)
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if not value or not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _is_after(value: Any, threshold: datetime) -> bool:
+    parsed = _parse_datetime(value)
+    return bool(parsed and parsed >= threshold)
+
+
+def _display_name(full_name: Any, email: Any) -> str:
+    if isinstance(full_name, str) and full_name.strip():
+        return full_name.strip()
+    if isinstance(email, str) and "@" in email:
+        local = email.split("@", 1)[0].strip()
+        if local:
+            return local.replace(".", " ").replace("_", " ").strip().title()
+    return "GridPilot User"
+
+
+def _admin_user_id(user_id: str) -> str:
+    token = user_id.replace("-", "").upper()
+    return f"U-{token[:8]}" if token else "U-UNKNOWN"

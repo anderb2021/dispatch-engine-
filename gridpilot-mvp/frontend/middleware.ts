@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient as refreshSupabaseSession } from "@/utils/supabase/middleware";
 
-const ADMIN_AUTH_COOKIE = "gridpilot_admin_auth";
 const BUYER_AUTH_COOKIE = "gridpilot_buyer_auth";
 
 function withSupabaseCookies(source: NextResponse, target: NextResponse) {
@@ -12,7 +11,7 @@ function withSupabaseCookies(source: NextResponse, target: NextResponse) {
 }
 
 export async function middleware(request: NextRequest) {
-  const { supabaseResponse, user } = await refreshSupabaseSession(request);
+  const { supabaseResponse, user, supabase } = await refreshSupabaseSession(request);
   const { pathname } = request.nextUrl;
   const isDashboardPath = pathname === "/dashboard" || pathname.startsWith("/dashboard/");
   const isAdminPath = pathname === "/admin" || pathname.startsWith("/admin/");
@@ -25,9 +24,17 @@ export async function middleware(request: NextRequest) {
     return withSupabaseCookies(supabaseResponse, NextResponse.redirect(new URL("/login", request.url)));
   }
 
-  const isAdminAuthenticated = request.cookies.get(ADMIN_AUTH_COOKIE)?.value === "1";
   if (isAdminPath) {
-    if (isAdminAuthenticated) return supabaseResponse;
+    if (!user) {
+      return withSupabaseCookies(supabaseResponse, NextResponse.redirect(new URL("/admin-login", request.url)));
+    }
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .limit(1)
+      .maybeSingle();
+    if (profile?.role === "admin") return supabaseResponse;
     return withSupabaseCookies(supabaseResponse, NextResponse.redirect(new URL("/admin-login", request.url)));
   }
 

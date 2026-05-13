@@ -2,18 +2,27 @@
 
 import { FormEvent, useState } from "react";
 import { ShieldCheck } from "lucide-react";
-import { loginAdminDemo } from "@/lib/auth";
+import { loginAdminWithEmail } from "@/lib/auth";
 import { BrandLogo } from "@/components/BrandLogo";
 
 export default function AdminLoginPage() {
-  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  function onSubmit(event: FormEvent<HTMLFormElement>) {
+  async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const ok = loginAdminDemo(username, password);
-    if (!ok) setError("Invalid admin credentials.");
+    setError("");
+    setIsSubmitting(true);
+    try {
+      const result = await loginAdminWithEmail(email, password);
+      if (!result.ok) {
+        setError(result.message);
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   return (
@@ -41,12 +50,12 @@ export default function AdminLoginPage() {
 
           <form onSubmit={onSubmit} className="space-y-4">
             <label className="block">
-              <span className="text-sm font-medium text-slate-700">Username</span>
+              <span className="text-sm font-medium text-slate-700">Email</span>
               <input
-                type="text"
+                type="email"
                 required
-                value={username}
-                onChange={(event) => setUsername(event.target.value)}
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
                 className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-950 outline-none focus:ring-2 focus:ring-grid-600"
               />
             </label>
@@ -66,9 +75,10 @@ export default function AdminLoginPage() {
 
             <button
               type="submit"
+              disabled={isSubmitting}
               className="w-full rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
             >
-              Log in as admin
+              {isSubmitting ? "Signing in..." : "Log in as admin"}
             </button>
           </form>
         </div>

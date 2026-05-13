@@ -1,12 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Activity,
   AlertTriangle,
   BatteryCharging,
   Car,
-  CheckCircle2,
   Coins,
   Gauge,
   PlugZap,
@@ -19,8 +18,9 @@ import {
   WalletCards,
 } from "lucide-react";
 import { BrandLogo } from "@/components/BrandLogo";
+import { createClient } from "@/utils/supabase/client";
 
-const adminData = {
+const fallbackAdminData = {
   network: {
     activeUsers: 42,
     connectedVehicles: 38,
@@ -111,6 +111,16 @@ const adminData = {
   ],
 };
 
+type AdminTelemetry = typeof fallbackAdminData & {
+  network: (typeof fallbackAdminData)["network"] & {
+    signupsTotal?: number;
+    signupsLast7Days?: number;
+  };
+  generatedAt?: string;
+};
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+
 function StatCard({
   label,
   value,
@@ -159,8 +169,52 @@ export function AdminDashboard() {
   const [minReliability, setMinReliability] = useState(80);
   const [maxRewardRate, setMaxRewardRate] = useState(0.12);
   const [search, setSearch] = useState("");
+  const [telemetry, setTelemetry] = useState<AdminTelemetry | null>(null);
+  const [isLoadingTelemetry, setIsLoadingTelemetry] = useState(true);
+  const [telemetryError, setTelemetryError] = useState<string | null>(null);
 
-  const filteredUsers = adminData.users.filter((user) =>
+  const loadTelemetry = useCallback(async () => {
+    setIsLoadingTelemetry(true);
+    setTelemetryError(null);
+    try {
+      const supabase = createClient();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const accessToken = session?.access_token;
+      if (!accessToken) {
+        throw new Error("Admin session missing. Please log in again.");
+      }
+
+      const response = await fetch(`${API_BASE}/admin/telemetry`, {
+        cache: "no-store",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+      if (!response.ok) {
+        throw new Error(`Telemetry request failed (${response.status})`);
+      }
+      const payload = (await response.json()) as AdminTelemetry;
+      setTelemetry(payload);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unable to load telemetry. Showing fallback data.";
+      setTelemetryError(message);
+    } finally {
+      setIsLoadingTelemetry(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadTelemetry();
+  }, [loadTelemetry]);
+
+  const data = telemetry ?? fallbackAdminData;
+
+  const filteredUsers = data.users.filter((user) =>
     `${user.name} ${user.vehicle} ${user.id}`.toLowerCase().includes(search.toLowerCase())
   );
 
@@ -194,35 +248,46 @@ export function AdminDashboard() {
             </p>
           </div>
 
-          <button className="inline-flex items-center justify-center gap-2 rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800">
+          <button
+            onClick={loadTelemetry}
+            className="inline-flex items-center justify-center gap-2 rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
+          >
             <RefreshCcw className="h-4 w-4" />
-            Refresh network
+            {isLoadingTelemetry ? "Refreshing..." : "Refresh network"}
           </button>
         </div>
+
+        <p className="mb-4 text-sm text-slate-500">
+          {telemetryError
+            ? `Telemetry unavailable (${telemetryError}). Showing fallback values.`
+            : data.generatedAt
+            ? `Live telemetry updated ${new Date(data.generatedAt).toLocaleString()}.`
+            : "Live telemetry connected."}
+        </p>
 
         <div className="grid gap-5 md:grid-cols-4">
           <StatCard
             dark
             label="Controllable load"
-            value={`${adminData.network.controllableKw.toFixed(1)} kW`}
+            value={`${data.network.controllableKw.toFixed(1)} kW`}
             caption="EV charging under management"
             icon={<PlugZap className="h-6 w-6" />}
           />
           <StatCard
             label="Active users"
-            value={`${adminData.network.activeUsers}`}
-            caption={`${adminData.network.connectedVehicles} connected vehicles`}
+            value={`${data.network.activeUsers}`}
+            caption={`${data.network.connectedVehicles} connected vehicles`}
             icon={<Users className="h-6 w-6" />}
           />
           <StatCard
             label="Flexible energy"
-            value={`${adminData.network.flexibleKwh.toFixed(0)} kWh`}
+            value={`${data.network.flexibleKwh.toFixed(0)} kWh`}
             caption="Estimated available pool"
             icon={<BatteryCharging className="h-6 w-6" />}
           />
           <StatCard
             label="Dispatch reliability"
-            value={`${adminData.network.dispatchReliability}%`}
+            value={`${data.network.dispatchReliability}%`}
             caption="Predicted network response"
             icon={<ShieldCheck className="h-6 w-6" />}
           />
@@ -231,26 +296,26 @@ export function AdminDashboard() {
         <div className="mt-5 grid gap-5 md:grid-cols-4">
           <StatCard
             label="Monthly rewards"
-            value={`$${adminData.network.monthlyRewardLiability.toFixed(2)}`}
+            value={`$${data.network.monthlyRewardLiability.toFixed(2)}`}
             caption="Current payout liability"
             icon={<Coins className="h-6 w-6" />}
           />
           <StatCard
             label="kWh shifted"
-            value={`${adminData.network.shiftedKwhMonth.toLocaleString()}`}
+            value={`${data.network.shiftedKwhMonth.toLocaleString()}`}
             caption="This month"
             icon={<Activity className="h-6 w-6" />}
           />
           <StatCard
-            label="Avg flex score"
-            value={`${adminData.network.avgFlexScore}`}
-            caption="Behavior engine estimate"
+            label="Sign-ups"
+            value={`${data.network.signupsTotal ?? data.network.activeUsers}`}
+            caption={`+${data.network.signupsLast7Days ?? 0} in last 7 days`}
             icon={<Gauge className="h-6 w-6" />}
           />
           <StatCard
-            label="Reward rate cap"
-            value={`$${maxRewardRate.toFixed(2)}`}
-            caption="Per shifted kWh"
+            label="Avg flex score"
+            value={`${data.network.avgFlexScore}`}
+            caption="Behavior engine estimate"
             icon={<WalletCards className="h-6 w-6" />}
           />
         </div>
@@ -415,7 +480,7 @@ export function AdminDashboard() {
               </div>
 
               <div className="mt-5 space-y-3">
-                {adminData.events.map((event) => (
+                {data.events.map((event) => (
                   <div
                     key={event.id}
                     className="grid gap-3 rounded-2xl bg-slate-50 p-4 md:grid-cols-[1fr_auto]"
@@ -428,7 +493,7 @@ export function AdminDashboard() {
                         </span>
                       </div>
                       <p className="mt-1 text-sm text-slate-500">
-                        {event.time} · {event.users} users · {event.kw} kW · {event.kwh} kWh
+                        {formatEventTime(event.time)} · {event.users} users · {event.kw} kW · {event.kwh} kWh
                       </p>
                     </div>
                     <div className="text-left md:text-right">
@@ -444,4 +509,12 @@ export function AdminDashboard() {
       </section>
     </main>
   );
+}
+
+function formatEventTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString();
 }

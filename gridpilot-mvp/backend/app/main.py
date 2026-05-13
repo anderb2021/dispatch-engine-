@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from urllib.parse import quote
@@ -39,6 +39,13 @@ def root():
 @app.get("/health")
 def health():
     return {"healthy": True}
+
+
+def _require_admin_auth(request: Request):
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing bearer token.")
+    return auth_header.removeprefix("Bearer ").strip()
 
 @app.get("/auth/tesla/start")
 def tesla_start(user_id: str = Query(...)):
@@ -226,3 +233,14 @@ def dashboard_summary(user_id: str = Query(...)):
         return {"summary": summary}
     except TeslaOAuthError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/admin/telemetry")
+def admin_telemetry(request: Request):
+    try:
+        access_token = _require_admin_auth(request)
+        repo = SupabaseRepo()
+        repo.validate_admin_access_token(access_token)
+        return repo.get_admin_telemetry()
+    except TeslaOAuthError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))

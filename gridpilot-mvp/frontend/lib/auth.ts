@@ -2,11 +2,10 @@
  * GridPilot auth helpers.
  *
  * User login/logout now uses Supabase Auth.
- * Admin and buyer flows remain demo-mode for now.
+ * Buyer flow remains demo-mode for now.
  */
 import { createClient } from "@/utils/supabase/client";
 
-const ADMIN_AUTH_KEY = "gridpilot_admin_auth";
 const BUYER_AUTH_KEY = "gridpilot_buyer_auth";
 
 function normalizeNextPath(nextPath?: string) {
@@ -56,22 +55,50 @@ export async function logoutUser() {
   window.location.href = "/";
 }
 
-function setAdminAuth(value: boolean) {
-  localStorage.setItem(ADMIN_AUTH_KEY, value ? "1" : "0");
-  document.cookie = `${ADMIN_AUTH_KEY}=${value ? "1" : "0"}; path=/; SameSite=Lax`;
-}
+export async function loginAdminWithEmail(email: string, password: string) {
+  const supabase = createClient();
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
+  if (error) {
+    return {
+      ok: false,
+      message: error.message || "Unable to sign in.",
+    };
+  }
 
-export function loginAdminDemo(username: string, password: string) {
-  const isValid = username === "ADMIN" && password === "12345678";
-  if (!isValid) return false;
+  const userId = data.user?.id;
+  if (!userId) {
+    await supabase.auth.signOut();
+    return {
+      ok: false,
+      message: "Missing user information from auth session.",
+    };
+  }
 
-  setAdminAuth(true);
+  const { data: profile, error: profileError } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", userId)
+    .limit(1)
+    .maybeSingle();
+
+  if (profileError || profile?.role !== "admin") {
+    await supabase.auth.signOut();
+    return {
+      ok: false,
+      message: "Admin access not granted for this account.",
+    };
+  }
+
   window.location.href = "/admin";
-  return true;
+  return { ok: true, message: "" };
 }
 
-export function logoutAdminDemo() {
-  setAdminAuth(false);
+export async function logoutAdmin() {
+  const supabase = createClient();
+  await supabase.auth.signOut();
   window.location.href = "/admin-login";
 }
 
