@@ -93,7 +93,7 @@ def tesla_redirect(
 @app.get("/auth/tesla/login/redirect")
 def tesla_login_redirect(
     next: str = Query("/dashboard"),
-    allow_charging_management: bool = Query(True),
+    allow_charging_management: bool = Query(False),
 ):
     try:
         data = build_authorize_url(
@@ -120,11 +120,14 @@ def tesla_callback(
 
     try:
         token_payload = exchange_code_for_token(code=code, state=state)
-        _enforce_required_tesla_scopes(token_payload)
         purpose = token_payload.get("purpose", purpose)
         allow_charging_management = bool(
             token_payload.get("allow_charging_management", True)
         )
+        # Login can succeed without charging-management scope.
+        # Enforce this scope only when charging control was requested.
+        if allow_charging_management:
+            _enforce_required_tesla_scopes(token_payload)
         repo = SupabaseRepo()
 
         if purpose == "login":

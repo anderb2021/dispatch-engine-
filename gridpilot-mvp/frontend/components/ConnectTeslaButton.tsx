@@ -9,7 +9,7 @@ export function ConnectTeslaButton() {
   function connectTesla() {
     trackButtonClick("connect_tesla");
     trackCompleteRegistration();
-    window.location.href = `${API_BASE}/auth/tesla/login/redirect?next=${encodeURIComponent("/dashboard")}&allow_charging_management=true`;
+    window.location.href = `${API_BASE}/auth/tesla/login/redirect?next=${encodeURIComponent("/dashboard")}&allow_charging_management=false`;
   }
 
   return (

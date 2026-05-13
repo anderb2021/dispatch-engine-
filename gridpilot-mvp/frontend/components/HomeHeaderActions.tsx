@@ -8,7 +8,7 @@ export function HomeHeaderActions() {
   function onJoinPilot() {
     trackButtonClick("join_pilot");
     trackCompleteRegistration();
-    window.location.href = `${API_BASE}/auth/tesla/login/redirect?next=${encodeURIComponent("/dashboard")}&allow_charging_management=true`;
+    window.location.href = `${API_BASE}/auth/tesla/login/redirect?next=${encodeURIComponent("/dashboard")}&allow_charging_management=false`;
   }
 
   return (

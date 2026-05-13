@@ -84,7 +84,7 @@ export function LoginPage() {
     setIsLoading(true);
     trackButtonClick("continue_with_tesla");
     trackCompleteRegistration();
-    window.location.href = `${API_BASE}/auth/tesla/login/redirect?next=${encodeURIComponent(nextPath)}&allow_charging_management=true`;
+    window.location.href = `${API_BASE}/auth/tesla/login/redirect?next=${encodeURIComponent(nextPath)}&allow_charging_management=false`;
   }
 
   return (
