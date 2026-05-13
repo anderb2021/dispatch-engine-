@@ -42,6 +42,38 @@ export function TeslaLoginCallbackClient({
         setError(sessionError.message);
         return;
       }
+
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      const userId = user?.id;
+      if (!userId) {
+        setError("Unable to load profile after Tesla login.");
+        return;
+      }
+
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("email")
+        .eq("id", userId)
+        .limit(1)
+        .maybeSingle();
+      if (profileError) {
+        setError(profileError.message);
+        return;
+      }
+
+      const profileEmail = profile?.email;
+      const authEmail = user?.email;
+      const needsEmailCapture =
+        isMissingOrPlaceholderEmail(profileEmail) &&
+        isMissingOrPlaceholderEmail(authEmail);
+
+      if (needsEmailCapture) {
+        window.location.href = `/auth/complete-profile?next=${encodeURIComponent(nextPath)}`;
+        return;
+      }
       trackCompleteRegistration();
       window.location.href = nextPath;
     }
@@ -65,4 +97,9 @@ export function TeslaLoginCallbackClient({
       </div>
     </main>
   );
+}
+
+function isMissingOrPlaceholderEmail(value?: string | null) {
+  if (!value || !value.trim()) return true;
+  return value.endsWith("@tesla.gridpilot.local");
 }
