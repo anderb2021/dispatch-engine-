@@ -212,7 +212,7 @@ export function AdminDashboard() {
     loadTelemetry();
   }, [loadTelemetry]);
 
-  const data = telemetry ?? fallbackAdminData;
+  const data: AdminTelemetry = telemetry ?? fallbackAdminData;
 
   const filteredUsers = data.users.filter((user) =>
     `${user.name} ${user.vehicle} ${user.id}`.toLowerCase().includes(search.toLowerCase())
