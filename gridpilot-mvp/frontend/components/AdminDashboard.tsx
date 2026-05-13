@@ -18,7 +18,6 @@ import {
   WalletCards,
 } from "lucide-react";
 import { BrandLogo } from "@/components/BrandLogo";
-import { createClient } from "@/utils/supabase/client";
 
 const fallbackAdminData = {
   network: {
@@ -119,7 +118,6 @@ type AdminTelemetry = typeof fallbackAdminData & {
   generatedAt?: string;
 };
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
 function StatCard({
   label,
@@ -177,20 +175,8 @@ export function AdminDashboard() {
     setIsLoadingTelemetry(true);
     setTelemetryError(null);
     try {
-      const supabase = createClient();
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const accessToken = session?.access_token;
-      if (!accessToken) {
-        throw new Error("Admin session missing. Please log in again.");
-      }
-
-      const response = await fetch(`${API_BASE}/admin/telemetry`, {
+      const response = await fetch("/api/admin/telemetry", {
         cache: "no-store",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
       });
       if (!response.ok) {
         throw new Error(`Telemetry request failed (${response.status})`);
