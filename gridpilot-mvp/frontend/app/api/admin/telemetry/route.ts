@@ -33,6 +33,7 @@ export async function GET() {
 
   const [
     { data: profiles = [] },
+    { data: teslaConnections = [] },
     { data: vehicles = [] },
     { data: snapshots = [] },
     { data: rewards = [] },
@@ -43,6 +44,10 @@ export async function GET() {
       .from("profiles")
       .select("id,full_name,email,created_at")
       .order("created_at", { ascending: false })
+      .limit(5000),
+    supabase
+      .from("tesla_connections")
+      .select("user_id,status")
       .limit(5000),
     supabase
       .from("vehicles")
@@ -71,11 +76,18 @@ export async function GET() {
   ]);
 
   const profileRows = (profiles ?? []) as Row[];
+  const teslaConnectionRows = (teslaConnections ?? []) as Row[];
   const vehicleRows = (vehicles ?? []) as Row[];
   const snapshotRows = (snapshots ?? []) as Row[];
   const rewardRows = (rewards ?? []) as Row[];
   const dispatchEventRows = (dispatchEvents ?? []) as Row[];
   const summaryDataRows = (summaryRows ?? []) as Row[];
+  const connectedTeslaUsers = new Set(
+    teslaConnectionRows
+      .filter((row) => String(row.status || "").toLowerCase() === "connected")
+      .map((row) => String(row.user_id || ""))
+      .filter(Boolean)
+  );
 
   const activeUsers = new Set(
     profileRows
@@ -140,6 +152,7 @@ export async function GET() {
 
     return {
       id: toAdminUserId(userId),
+      userId,
       name: displayName(row.full_name, row.email),
       vehicle: String(vehicle.display_name || vehicle.model || "No vehicle"),
       battery: Math.round(toNumber(snapshot.battery_level)),
@@ -148,6 +161,7 @@ export async function GET() {
       reliability: Math.round(toNumber(summary.dispatch_reliability)),
       rewards: round2(rewardByUserThisMonth.get(userId) || 0),
       controllableKw: round1(toNumber(vehicle.controllable_kw)),
+      teslaConnected: connectedTeslaUsers.has(userId),
     };
   });
 

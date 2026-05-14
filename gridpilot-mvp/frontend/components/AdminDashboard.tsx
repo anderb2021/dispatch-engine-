@@ -115,6 +115,12 @@ type AdminTelemetry = typeof fallbackAdminData & {
     signupsTotal?: number;
     signupsLast7Days?: number;
   };
+  users: Array<
+    (typeof fallbackAdminData)["users"][number] & {
+      userId?: string;
+      teslaConnected?: boolean;
+    }
+  >;
   generatedAt?: string;
 };
 
@@ -170,6 +176,9 @@ export function AdminDashboard() {
   const [telemetry, setTelemetry] = useState<AdminTelemetry | null>(null);
   const [isLoadingTelemetry, setIsLoadingTelemetry] = useState(true);
   const [telemetryError, setTelemetryError] = useState<string | null>(null);
+  const [isSyncingAllTesla, setIsSyncingAllTesla] = useState(false);
+  const [syncingUserId, setSyncingUserId] = useState<string | null>(null);
+  const [syncStatusMessage, setSyncStatusMessage] = useState<string | null>(null);
 
   const loadTelemetry = useCallback(async () => {
     setIsLoadingTelemetry(true);
@@ -204,6 +213,66 @@ export function AdminDashboard() {
     `${user.name} ${user.vehicle} ${user.id}`.toLowerCase().includes(search.toLowerCase())
   );
 
+  async function syncTeslaForAllUsers() {
+    if (isSyncingAllTesla) return;
+    setSyncStatusMessage(null);
+    setIsSyncingAllTesla(true);
+    try {
+      const response = await fetch("/api/admin/tesla-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "all", includeVehicles: true, includeTelemetry: true }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload?.error || `Tesla sync failed (${response.status})`);
+      }
+      setSyncStatusMessage(
+        `Tesla sync finished: ${payload.successCount}/${payload.syncedUsers} users updated.`
+      );
+      await loadTelemetry();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to sync Tesla data.";
+      setSyncStatusMessage(message);
+    } finally {
+      setIsSyncingAllTesla(false);
+    }
+  }
+
+  async function syncTeslaForUser(userId?: string) {
+    if (!userId || syncingUserId) return;
+    setSyncStatusMessage(null);
+    setSyncingUserId(userId);
+    try {
+      const response = await fetch("/api/admin/tesla-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "user",
+          userId,
+          includeVehicles: true,
+          includeTelemetry: true,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload?.error || `Tesla sync failed (${response.status})`);
+      }
+      const result = Array.isArray(payload.results) ? payload.results[0] : undefined;
+      if (result?.error) {
+        setSyncStatusMessage(`User sync failed: ${result.error}`);
+      } else {
+        setSyncStatusMessage("User Tesla data refreshed.");
+      }
+      await loadTelemetry();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to sync Tesla data.";
+      setSyncStatusMessage(message);
+    } finally {
+      setSyncingUserId(null);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-gradient-to-b from-grid-50 via-white to-slate-50">
       <header className="mx-auto flex max-w-7xl items-center justify-between px-6 py-6">
@@ -234,13 +303,23 @@ export function AdminDashboard() {
             </p>
           </div>
 
-          <button
-            onClick={loadTelemetry}
-            className="inline-flex items-center justify-center gap-2 rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
-          >
-            <RefreshCcw className="h-4 w-4" />
-            {isLoadingTelemetry ? "Refreshing..." : "Refresh network"}
-          </button>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={syncTeslaForAllUsers}
+              disabled={isSyncingAllTesla}
+              className="inline-flex items-center justify-center gap-2 rounded-full bg-grid-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-grid-500 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              <PlugZap className="h-4 w-4" />
+              {isSyncingAllTesla ? "Syncing Tesla..." : "Sync all Tesla data"}
+            </button>
+            <button
+              onClick={loadTelemetry}
+              className="inline-flex items-center justify-center gap-2 rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
+            >
+              <RefreshCcw className="h-4 w-4" />
+              {isLoadingTelemetry ? "Refreshing..." : "Refresh network"}
+            </button>
+          </div>
         </div>
 
         <p className="mb-4 text-sm text-slate-500">
@@ -250,6 +329,7 @@ export function AdminDashboard() {
             ? `Live telemetry updated ${new Date(data.generatedAt).toLocaleString()}.`
             : "Live telemetry connected."}
         </p>
+        {syncStatusMessage ? <p className="mb-4 text-sm text-grid-700">{syncStatusMessage}</p> : null}
 
         <div className="grid gap-5 md:grid-cols-4">
           <StatCard
@@ -423,6 +503,7 @@ export function AdminDashboard() {
                       <th className="px-4 py-3">Flex</th>
                       <th className="px-4 py-3">Reliability</th>
                       <th className="px-4 py-3">Rewards</th>
+                      <th className="px-4 py-3">Tesla</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 bg-white">
@@ -446,6 +527,15 @@ export function AdminDashboard() {
                         <td className="px-4 py-4">{user.reliability}%</td>
                         <td className="px-4 py-4 font-semibold text-grid-600">
                           ${user.rewards.toFixed(2)}
+                        </td>
+                        <td className="px-4 py-4">
+                          <button
+                            onClick={() => syncTeslaForUser(user.userId)}
+                            disabled={!user.userId || syncingUserId === user.userId}
+                            className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {syncingUserId === user.userId ? "Syncing..." : "Sync"}
+                          </button>
                         </td>
                       </tr>
                     ))}
