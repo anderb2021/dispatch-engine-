@@ -33,6 +33,21 @@ type AdminUser = {
   teslaConnected?: boolean;
 };
 
+type TeslaSyncResult = {
+  userId: string;
+  vehiclesOk: boolean;
+  telemetryOk: boolean;
+  error?: string;
+};
+
+type TeslaSyncResponse = {
+  syncedUsers: number;
+  successCount: number;
+  failedCount: number;
+  results?: TeslaSyncResult[];
+  error?: string;
+};
+
 const fallbackAdminData = {
   network: {
     activeUsers: 42,
@@ -188,6 +203,7 @@ export function AdminDashboard() {
   const [isSyncingAllTesla, setIsSyncingAllTesla] = useState(false);
   const [syncingUserId, setSyncingUserId] = useState<string | null>(null);
   const [syncStatusMessage, setSyncStatusMessage] = useState<string | null>(null);
+  const [syncErrors, setSyncErrors] = useState<TeslaSyncResult[]>([]);
 
   const loadTelemetry = useCallback(async () => {
     setIsLoadingTelemetry(true);
@@ -225,6 +241,7 @@ export function AdminDashboard() {
   async function syncTeslaForAllUsers() {
     if (isSyncingAllTesla) return;
     setSyncStatusMessage(null);
+    setSyncErrors([]);
     setIsSyncingAllTesla(true);
     try {
       const response = await fetch("/api/admin/tesla-sync", {
@@ -232,13 +249,15 @@ export function AdminDashboard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode: "all", includeVehicles: true, includeTelemetry: true }),
       });
-      const payload = await response.json();
+      const payload = (await response.json()) as TeslaSyncResponse;
       if (!response.ok) {
         throw new Error(payload?.error || `Tesla sync failed (${response.status})`);
       }
       setSyncStatusMessage(
         `Tesla sync finished: ${payload.successCount}/${payload.syncedUsers} users updated.`
       );
+      const failedResults = (payload.results ?? []).filter((item) => Boolean(item.error));
+      setSyncErrors(failedResults);
       await loadTelemetry();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to sync Tesla data.";
@@ -251,6 +270,7 @@ export function AdminDashboard() {
   async function syncTeslaForUser(userId?: string) {
     if (!userId || syncingUserId) return;
     setSyncStatusMessage(null);
+    setSyncErrors([]);
     setSyncingUserId(userId);
     try {
       const response = await fetch("/api/admin/tesla-sync", {
@@ -263,13 +283,14 @@ export function AdminDashboard() {
           includeTelemetry: true,
         }),
       });
-      const payload = await response.json();
+      const payload = (await response.json()) as TeslaSyncResponse;
       if (!response.ok) {
         throw new Error(payload?.error || `Tesla sync failed (${response.status})`);
       }
       const result = Array.isArray(payload.results) ? payload.results[0] : undefined;
       if (result?.error) {
         setSyncStatusMessage(`User sync failed: ${result.error}`);
+        setSyncErrors([result]);
       } else {
         setSyncStatusMessage("User Tesla data refreshed.");
       }
@@ -339,6 +360,23 @@ export function AdminDashboard() {
             : "Live telemetry connected."}
         </p>
         {syncStatusMessage ? <p className="mb-4 text-sm text-grid-700">{syncStatusMessage}</p> : null}
+        {syncErrors.length ? (
+          <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 p-3">
+            <p className="text-sm font-semibold text-rose-800">Tesla sync errors</p>
+            <div className="mt-2 space-y-1">
+              {syncErrors.slice(0, 6).map((item) => (
+                <p key={`${item.userId}-${item.error}`} className="text-xs text-rose-700">
+                  <span className="font-semibold">{item.userId}:</span> {item.error}
+                </p>
+              ))}
+              {syncErrors.length > 6 ? (
+                <p className="text-xs text-rose-700">
+                  ...and {syncErrors.length - 6} more. Check network response for full list.
+                </p>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
 
         <div className="grid gap-5 md:grid-cols-4">
           <StatCard
