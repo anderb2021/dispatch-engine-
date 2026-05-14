@@ -74,6 +74,23 @@ def _enforce_required_tesla_scopes(token_payload: dict):
         )
 
 
+def _is_expired_tesla_token_error(exc: TeslaOAuthError) -> bool:
+    message = str(exc).lower()
+    return "token expired" in message or "401" in message
+
+
+def _refresh_tesla_tokens(repo: SupabaseRepo, user_id: str) -> str:
+    existing_refresh_token = repo.get_refresh_token(user_id)
+    refreshed_payload = refresh_access_token(existing_refresh_token)
+
+    # Some providers omit refresh_token on refresh; keep the previous one.
+    if not refreshed_payload.get("refresh_token"):
+        refreshed_payload["refresh_token"] = existing_refresh_token
+
+    repo.upsert_tesla_connection(user_id=user_id, token_payload=refreshed_payload)
+    return repo.get_access_token(user_id)
+
+
 @app.get("/auth/tesla/redirect")
 def tesla_redirect(
     user_id: str = Query(...),
@@ -183,7 +200,13 @@ def tesla_vehicles(user_id: str = Query(...)):
     try:
         repo = SupabaseRepo()
         access_token = repo.get_access_token(user_id)
-        vehicles_payload = list_vehicles(access_token=access_token)
+        try:
+            vehicles_payload = list_vehicles(access_token=access_token)
+        except TeslaOAuthError as exc:
+            if not _is_expired_tesla_token_error(exc):
+                raise
+            access_token = _refresh_tesla_tokens(repo, user_id)
+            vehicles_payload = list_vehicles(access_token=access_token)
         connection = repo.get_tesla_connection(user_id)
         upserted = repo.upsert_vehicles(
             user_id=user_id,
@@ -206,11 +229,22 @@ def tesla_poll_telemetry(user_id: str = Query(...)):
         access_token = repo.get_access_token(user_id)
         vehicles = repo.list_active_vehicles(user_id)
         snapshots = []
+        retried_after_refresh = False
         for vehicle in vehicles:
-            telemetry_payload = get_vehicle_data(
-                tesla_vehicle_id=vehicle["tesla_vehicle_id"],
-                access_token=access_token,
-            )
+            try:
+                telemetry_payload = get_vehicle_data(
+                    tesla_vehicle_id=vehicle["tesla_vehicle_id"],
+                    access_token=access_token,
+                )
+            except TeslaOAuthError as exc:
+                if retried_after_refresh or not _is_expired_tesla_token_error(exc):
+                    raise
+                access_token = _refresh_tesla_tokens(repo, user_id)
+                retried_after_refresh = True
+                telemetry_payload = get_vehicle_data(
+                    tesla_vehicle_id=vehicle["tesla_vehicle_id"],
+                    access_token=access_token,
+                )
             snapshots.append(
                 repo.insert_vehicle_snapshot(
                     user_id=user_id,
