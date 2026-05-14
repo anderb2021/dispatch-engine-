@@ -19,6 +19,20 @@ import {
 } from "lucide-react";
 import { BrandLogo } from "@/components/BrandLogo";
 
+type AdminUser = {
+  id: string;
+  name: string;
+  vehicle: string;
+  battery: number;
+  status: string;
+  flexScore: number;
+  reliability: number;
+  rewards: number;
+  controllableKw: number;
+  userId?: string;
+  teslaConnected?: boolean;
+};
+
 const fallbackAdminData = {
   network: {
     activeUsers: 42,
@@ -115,12 +129,7 @@ type AdminTelemetry = typeof fallbackAdminData & {
     signupsTotal?: number;
     signupsLast7Days?: number;
   };
-  users: Array<
-    (typeof fallbackAdminData)["users"][number] & {
-      userId?: string;
-      teslaConnected?: boolean;
-    }
-  >;
+  users: AdminUser[];
   generatedAt?: string;
 };
 
@@ -209,7 +218,7 @@ export function AdminDashboard() {
 
   const data: AdminTelemetry = telemetry ?? fallbackAdminData;
 
-  const filteredUsers = data.users.filter((user) =>
+  const filteredUsers: AdminUser[] = data.users.filter((user) =>
     `${user.name} ${user.vehicle} ${user.id}`.toLowerCase().includes(search.toLowerCase())
   );
 
