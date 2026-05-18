@@ -49,6 +49,72 @@ export async function loginWithEmail(email: string, password: string, nextPath?:
   window.location.href = next;
 }
 
+type SignupInput = {
+  fullName: string;
+  email: string;
+  phoneNumber: string;
+  password: string;
+};
+
+type SignupResult = {
+  ok: boolean;
+  message: string;
+  needsEmailConfirmation?: boolean;
+};
+
+export async function signupWithEmail(input: SignupInput): Promise<SignupResult> {
+  const fullName = input.fullName.trim();
+  const email = input.email.trim().toLowerCase();
+  const phoneNumber = input.phoneNumber.trim();
+  const password = input.password;
+
+  if (!fullName || !email || !phoneNumber || !password) {
+    return { ok: false, message: "Please complete all signup fields." };
+  }
+
+  const supabase = createClient();
+  const redirectTo = `${window.location.origin}/auth/callback?next=${encodeURIComponent("/dashboard")}`;
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      emailRedirectTo: redirectTo,
+      data: {
+        full_name: fullName,
+        phone_number: phoneNumber,
+      },
+    },
+  });
+
+  if (error) {
+    return { ok: false, message: error.message || "Unable to create account." };
+  }
+
+  const userId = data.user?.id;
+  if (userId) {
+    // Best effort profile upsert; signup should still succeed if this fails.
+    await supabase.from("profiles").upsert(
+      {
+        id: userId,
+        email,
+        full_name: fullName,
+      },
+      { onConflict: "id" }
+    );
+  }
+
+  if (!data.session) {
+    return {
+      ok: true,
+      needsEmailConfirmation: true,
+      message: "Account created. Check your email to confirm your account before signing in.",
+    };
+  }
+
+  window.location.href = "/dashboard";
+  return { ok: true, message: "" };
+}
+
 export async function logoutUser() {
   const supabase = createClient();
   await supabase.auth.signOut();

@@ -1,14 +1,11 @@
 "use client";
 
-import { trackButtonClick, trackCompleteRegistration } from "@/lib/metaPixel";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8001";
+import { trackButtonClick } from "@/lib/metaPixel";
 
 export function HomeHeaderActions() {
   function onJoinPilot() {
     trackButtonClick("join_pilot");
-    trackCompleteRegistration();
-    window.location.href = `${API_BASE}/auth/tesla/login/redirect?next=${encodeURIComponent("/dashboard")}&allow_charging_management=false`;
+    window.location.href = "/signup";
   }
 
   return (

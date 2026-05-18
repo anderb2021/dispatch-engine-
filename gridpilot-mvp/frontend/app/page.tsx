@@ -28,7 +28,7 @@ export default function Home() {
             Connect your Tesla once. GridPilot learns your charging behavior in the background and rewards flexibility automatically — no daily schedules, no energy trading, no extra work.
           </p>
 
-          <div id="join" className="mt-8 flex flex-col gap-3 sm:flex-row">
+          <div id="join" className="mt-8 flex flex-col items-start gap-3 sm:flex-row sm:items-start">
             <ConnectTeslaButton />
             <a
               href="/dashboard"
