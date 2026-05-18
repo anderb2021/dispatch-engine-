@@ -30,12 +30,6 @@ export default function Home() {
 
           <div id="join" className="mt-8 flex flex-col items-start gap-3 sm:flex-row sm:items-start">
             <ConnectTeslaButton />
-            <a
-              href="/dashboard"
-              className="inline-flex items-center justify-center rounded-full bg-white px-6 py-3 text-sm font-semibold text-slate-950 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50"
-            >
-              View demo dashboard
-            </a>
           </div>
 
           <div className="mt-8 grid gap-3 sm:grid-cols-3">
