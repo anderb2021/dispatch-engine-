@@ -1,12 +1,12 @@
 "use client";
 
+import Image from "next/image";
 import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   ArrowRight,
   BatteryCharging,
   CheckCircle2,
-  Car,
   Lock,
   Mail,
   PlugZap,
@@ -166,11 +166,26 @@ export function LoginPage() {
             <button
               onClick={handleTeslaLogin}
               disabled={isLoading}
-              className="mt-6 flex w-full items-center justify-center gap-3 rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
+              className="mt-6 inline-flex w-full items-center justify-center gap-3 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-sm ring-1 ring-white/10 transition hover:-translate-y-0.5 hover:bg-slate-900 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-grid-600 focus-visible:ring-offset-2 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-70"
             >
-              <Car className="h-5 w-5" />
-              Continue with Tesla
+              <Image
+                src="/tesla-logo.png"
+                alt=""
+                width={20}
+                height={20}
+                className="h-5 w-5"
+                aria-hidden="true"
+              />
+              {isLoading ? "Redirecting..." : "Sign in with Tesla"}
             </button>
+            <div className="mt-2 space-y-0.5 text-center">
+              <p className="text-xs text-slate-600">
+                Secure OAuth connection. GridPilot never stores your Tesla password.
+              </p>
+              <p className="text-xs text-slate-500">
+                No hardware required. Manual override always available.
+              </p>
+            </div>
 
             <button
               onClick={handleGoogleLogin}

@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight } from "lucide-react";
+import Image from "next/image";
 import { trackButtonClick, trackCompleteRegistration } from "@/lib/metaPixel";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8001";
@@ -13,12 +13,29 @@ export function ConnectTeslaButton() {
   }
 
   return (
-    <button
-      onClick={connectTesla}
-      className="inline-flex items-center justify-center gap-2 rounded-full bg-grid-600 px-6 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-grid-500"
-    >
-      Connect Tesla
-      <ArrowRight className="h-4 w-4" />
-    </button>
+    <div className="inline-flex flex-col items-start gap-2">
+      <button
+        onClick={connectTesla}
+        className="inline-flex items-center justify-center gap-3 rounded-2xl bg-slate-950 px-6 py-3 text-sm font-semibold text-white shadow-sm ring-1 ring-white/10 transition hover:-translate-y-0.5 hover:bg-slate-900 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-grid-600 focus-visible:ring-offset-2 active:scale-[0.99]"
+      >
+        <Image
+          src="/tesla-logo.png"
+          alt=""
+          width={18}
+          height={18}
+          className="h-[18px] w-[18px]"
+          aria-hidden="true"
+        />
+        Connect Your Tesla
+      </button>
+      <div className="space-y-0.5 text-left">
+        <p className="text-xs text-slate-600">
+          Secure OAuth connection. GridPilot never stores your Tesla password.
+        </p>
+        <p className="text-xs text-slate-500">
+          No hardware required. Manual override always available.
+        </p>
+      </div>
+    </div>
   );
 }
