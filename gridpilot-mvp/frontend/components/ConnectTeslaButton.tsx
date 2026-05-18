@@ -13,10 +13,10 @@ export function ConnectTeslaButton() {
   }
 
   return (
-    <div className="inline-flex flex-col items-start gap-2">
+    <div className="inline-flex w-full max-w-sm flex-col items-center gap-2 text-center">
       <button
         onClick={connectTesla}
-        className="inline-flex items-center justify-center gap-3 rounded-2xl bg-slate-950 px-6 py-3 text-sm font-semibold text-white shadow-sm ring-1 ring-white/10 transition hover:-translate-y-0.5 hover:bg-slate-900 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-grid-600 focus-visible:ring-offset-2 active:scale-[0.99]"
+        className="inline-flex h-12 w-full items-center justify-center gap-3 rounded-2xl bg-slate-950 px-6 text-sm font-semibold text-white shadow-sm ring-1 ring-white/10 transition hover:-translate-y-0.5 hover:bg-slate-900 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-grid-600 focus-visible:ring-offset-2 active:scale-[0.99] sm:w-auto sm:min-w-[250px]"
       >
         <Image
           src="/tesla-logo.png"
@@ -28,7 +28,7 @@ export function ConnectTeslaButton() {
         />
         Connect Your Tesla
       </button>
-      <div className="space-y-0.5 text-left">
+      <div className="space-y-0.5 text-center">
         <p className="text-xs text-slate-600">
           Secure OAuth connection. GridPilot never stores your Tesla password.
         </p>
