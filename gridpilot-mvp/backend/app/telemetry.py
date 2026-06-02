@@ -30,6 +30,9 @@ CONNECTED_CHARGING_STATES = {
     "connected",
 }
 
+# conn_charge_cable values when nothing is plugged in (Tesla Fleet API).
+_NO_CABLE_VALUES = {"<invalid>", "invalid", "none", ""}
+
 # Cap applied to the gap between two consecutive snapshots when integrating
 # plugged/charging minutes. Polling runs every 15 min; if a poll is missed we do
 # not want a multi-hour gap to overcount. 0.5h is a conservative ceiling.
@@ -39,6 +42,20 @@ MAX_INTERVAL_HOURS = 0.5
 FLEXIBLE_ENERGY_FRACTION = 0.5
 
 
+def derive_plugged_in(charge_state: dict[str, Any]) -> bool:
+    """Detect cable connected from Tesla charge_state (not charge_port_door_open).
+
+    charge_port_door_open only means the flap is open, not that a charger is connected.
+    """
+    cable = str(charge_state.get("conn_charge_cable") or "").strip().lower()
+    if cable and cable not in _NO_CABLE_VALUES:
+        return True
+    state = str(charge_state.get("charging_state") or "").strip().lower()
+    if state in CONNECTED_CHARGING_STATES:
+        return True
+    return False
+
+
 def is_connected_or_charging(plugged_in: Any, charging_state: Any) -> bool:
     """True when the vehicle is plugged in / connected to a charger."""
     if bool(plugged_in):
@@ -46,6 +63,37 @@ def is_connected_or_charging(plugged_in: Any, charging_state: Any) -> bool:
     if isinstance(charging_state, str):
         return charging_state.strip().lower() in CONNECTED_CHARGING_STATES
     return False
+
+
+def _coerce_coord(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed == 0.0:
+        return None
+    return parsed
+
+
+def extract_drive_location(drive_state: dict[str, Any]) -> tuple[float | None, float | None]:
+    """Read lat/lon from Tesla drive_state (tries primary and fallback fields)."""
+    if not drive_state:
+        return None, None
+    for lat_key, lon_key in (
+        ("latitude", "longitude"),
+        ("corrected_latitude", "corrected_longitude"),
+        ("native_latitude", "native_longitude"),
+    ):
+        lat = _coerce_coord(drive_state.get(lat_key))
+        lon = _coerce_coord(drive_state.get(lon_key))
+        if lat is None or lon is None:
+            continue
+        if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+            continue
+        return lat, lon
+    return None, None
 
 
 def _to_float(value: Any) -> float:
@@ -107,15 +155,15 @@ def normalize_snapshot(
     charge_state = response_data.get("charge_state") or {}
     drive_state = response_data.get("drive_state") or {}
 
-    plugged_in = bool(charge_state.get("charge_port_door_open"))
+    plugged_in = derive_plugged_in(charge_state)
     charging_state = charge_state.get("charging_state")
 
     # Location privacy rule: only keep coordinates while connected/charging.
+    # Tesla requires vehicle_location OAuth scope or drive_state omits lat/lon.
     latitude = None
     longitude = None
     if is_connected_or_charging(plugged_in, charging_state):
-        latitude = drive_state.get("latitude")
-        longitude = drive_state.get("longitude")
+        latitude, longitude = extract_drive_location(drive_state)
 
     return {
         "vehicle_id": vehicle_row["id"],

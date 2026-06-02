@@ -15,6 +15,7 @@ DEFAULT_SCOPES = [
     "offline_access",
     "user_data",
     "vehicle_device_data",
+    "vehicle_location",  # Required for drive_state lat/lon on firmware 2023.38+
     "vehicle_charging_cmds",
 ]
 
@@ -214,7 +215,11 @@ def get_vehicle_data(tesla_vehicle_id: str, access_token: str) -> dict:
             },
         }
 
-    url = f"{config.TESLA_FLEET_BASE_URL}/api/1/vehicles/{tesla_vehicle_id}/vehicle_data"
+    # Request charge + drive endpoints explicitly so drive_state (location) is included.
+    url = (
+        f"{config.TESLA_FLEET_BASE_URL}/api/1/vehicles/{tesla_vehicle_id}/vehicle_data"
+        "?endpoints=charge_state;drive_state"
+    )
     response = requests.get(
         url,
         headers={"Authorization": f"Bearer {access_token}"},
