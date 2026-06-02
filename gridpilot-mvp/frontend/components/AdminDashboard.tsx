@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   BatteryCharging,
   Car,
+  CheckCircle2,
   Coins,
   Gauge,
   MapPin,
@@ -27,6 +28,11 @@ import {
   type RecentSnapshotRow,
   type TelemetrySummary,
 } from "@/lib/telemetryAnalytics";
+import {
+  fallbackAdminMarketplaceSummary,
+  type AdminMarketplaceSummary,
+  type AdminMarketplaceUserRow,
+} from "@/lib/marketplaceQualification";
 
 type AdminUser = {
   id: string;
@@ -239,6 +245,37 @@ export function AdminDashboard() {
   const [isPullingLocationAll, setIsPullingLocationAll] = useState(false);
   const [pullingLocationUserId, setPullingLocationUserId] = useState<string | null>(null);
   const [locationStatusMessage, setLocationStatusMessage] = useState<string | null>(null);
+  const [marketplaceSummary, setMarketplaceSummary] =
+    useState<AdminMarketplaceSummary | null>(null);
+  const [marketplaceUsers, setMarketplaceUsers] = useState<AdminMarketplaceUserRow[]>([]);
+  const [isLoadingMarketplace, setIsLoadingMarketplace] = useState(true);
+  const [marketplaceError, setMarketplaceError] = useState<string | null>(null);
+
+  const loadMarketplaceQualification = useCallback(async () => {
+    setIsLoadingMarketplace(true);
+    setMarketplaceError(null);
+    let usedFallback = false;
+    const [summaryRes, usersRes] = await Promise.all([
+      fetch("/api/admin/marketplace-qualification/summary", { cache: "no-store" }),
+      fetch("/api/admin/marketplace-qualification/users", { cache: "no-store" }),
+    ]);
+    if (summaryRes.ok) {
+      setMarketplaceSummary((await summaryRes.json()) as AdminMarketplaceSummary);
+    } else {
+      usedFallback = true;
+      setMarketplaceSummary(fallbackAdminMarketplaceSummary);
+    }
+    if (usersRes.ok) {
+      const payload = (await usersRes.json()) as { users?: AdminMarketplaceUserRow[] };
+      setMarketplaceUsers(payload.users ?? []);
+    } else {
+      usedFallback = true;
+    }
+    if (usedFallback) {
+      setMarketplaceError("Marketplace qualification API unavailable. Showing sample data.");
+    }
+    setIsLoadingMarketplace(false);
+  }, []);
 
   const loadTelemetry = useCallback(async () => {
     setIsLoadingTelemetry(true);
@@ -307,12 +344,14 @@ export function AdminDashboard() {
   useEffect(() => {
     loadTelemetry();
     loadFlexAnalytics();
-  }, [loadTelemetry, loadFlexAnalytics]);
+    loadMarketplaceQualification();
+  }, [loadTelemetry, loadFlexAnalytics, loadMarketplaceQualification]);
 
   const data: AdminTelemetry = telemetry ?? fallbackAdminData;
   const flexSummary = telemetrySummary ?? fallbackTelemetrySummary;
   const flexRecent = recentSnapshots.length ? recentSnapshots : fallbackRecentSnapshots;
   const flexDaily = dailyFlex.length ? dailyFlex : fallbackDailyFlex;
+  const mktSummary = marketplaceSummary ?? fallbackAdminMarketplaceSummary;
 
   const filteredUsers: AdminUser[] = data.users.filter((user) =>
     `${user.name} ${user.vehicle} ${user.id}`.toLowerCase().includes(search.toLowerCase())
@@ -498,6 +537,7 @@ export function AdminDashboard() {
               onClick={() => {
                 loadTelemetry();
                 loadFlexAnalytics();
+                loadMarketplaceQualification();
               }}
               className="inline-flex items-center justify-center gap-2 rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
             >
@@ -768,6 +808,88 @@ export function AdminDashboard() {
               </div>
             </div>
           </div>
+        </div>
+
+        <div className="mt-8 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+          <h2 className="text-lg font-semibold text-slate-950">Marketplace Qualification</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            PJM marketplace readiness — location scope, ZIP/utility verification, and eligibility
+            (no precise coordinates shown).
+          </p>
+          {marketplaceError ? (
+            <p className="mt-2 text-sm text-amber-700">{marketplaceError}</p>
+          ) : null}
+          {isLoadingMarketplace ? (
+            <p className="mt-4 text-sm text-slate-500">Loading qualification data...</p>
+          ) : (
+            <>
+              <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <StatCard
+                  label="Connected users"
+                  value={`${mktSummary.total_connected_users}`}
+                  icon={<Users className="h-6 w-6" />}
+                />
+                <StatCard
+                  label="Location scope enabled"
+                  value={`${mktSummary.vehicle_location_scope_enabled}`}
+                  caption={`${mktSummary.missing_location_scope} missing`}
+                  icon={<MapPin className="h-6 w-6" />}
+                />
+                <StatCard
+                  label="ZIP verified"
+                  value={`${mktSummary.zip_verified}`}
+                  icon={<ShieldCheck className="h-6 w-6" />}
+                />
+                <StatCard
+                  label="Utility verified"
+                  value={`${mktSummary.utility_verified}`}
+                  icon={<PlugZap className="h-6 w-6" />}
+                />
+                <StatCard
+                  label="Marketplace eligible"
+                  value={`${mktSummary.marketplace_eligible}`}
+                  icon={<CheckCircle2 className="h-6 w-6" />}
+                />
+                <StatCard
+                  label="Needs verification"
+                  value={`${mktSummary.needs_verification}`}
+                  icon={<AlertTriangle className="h-6 w-6" />}
+                />
+              </div>
+              <div className="mt-6 overflow-hidden rounded-2xl border border-slate-200">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
+                    <tr>
+                      <th className="px-3 py-2">User</th>
+                      <th className="px-3 py-2">Vehicle</th>
+                      <th className="px-3 py-2">ZIP</th>
+                      <th className="px-3 py-2">Utility</th>
+                      <th className="px-3 py-2">PJM Zone</th>
+                      <th className="px-3 py-2">Location Scope</th>
+                      <th className="px-3 py-2">Location Status</th>
+                      <th className="px-3 py-2">Qualification Status</th>
+                      <th className="px-3 py-2">Next Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 bg-white">
+                    {marketplaceUsers.slice(0, 50).map((row) => (
+                      <tr key={row.user_id} className="hover:bg-slate-50">
+                        <td className="px-3 py-3 font-medium text-slate-900">{row.name}</td>
+                        <td className="px-3 py-3 text-slate-600">{row.vehicle}</td>
+                        <td className="px-3 py-3">{row.zip_code}</td>
+                        <td className="px-3 py-3">{row.utility_provider}</td>
+                        <td className="px-3 py-3">{row.pjm_zone}</td>
+                        <td className="px-3 py-3">{row.location_scope}</td>
+                        <td className="px-3 py-3 text-xs">{row.location_verification}</td>
+                        <td className="px-3 py-3">{row.qualification_status}</td>
+                        <td className="px-3 py-3 text-xs text-slate-600">{row.next_action}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </div>
 
         <div className="mt-5 grid gap-5 lg:grid-cols-[0.75fr_1.25fr]">

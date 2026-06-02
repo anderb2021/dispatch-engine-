@@ -10,14 +10,19 @@ from . import config
 
 TOKEN_STORE = {}
 
+# Order matches Tesla Fleet API docs; request full vehicle integration set up front.
 DEFAULT_SCOPES = [
     "openid",
     "offline_access",
     "user_data",
     "vehicle_device_data",
-    "vehicle_location",  # Required for drive_state lat/lon on firmware 2023.38+
+    "vehicle_cmds",
     "vehicle_charging_cmds",
+    "vehicle_location",  # drive_state lat/lon on firmware 2023.38+
 ]
+
+# Enforced on callback when allow_charging_management=True (all scopes except openid).
+REQUIRED_TESLA_SCOPES = frozenset(scope for scope in DEFAULT_SCOPES if scope != "openid")
 
 class TeslaOAuthError(Exception):
     pass
@@ -32,8 +37,10 @@ def build_authorize_url(
         raise TeslaOAuthError("Missing TESLA_CLIENT_ID in backend .env")
     if purpose == "connect" and not user_id:
         raise TeslaOAuthError("Missing user_id. Log in before connecting Tesla.")
-    if purpose not in {"connect", "login"}:
+    if purpose not in {"connect", "login", "location_upgrade"}:
         raise TeslaOAuthError("Invalid Tesla OAuth purpose.")
+    if purpose == "location_upgrade" and not user_id:
+        raise TeslaOAuthError("Missing user_id for location scope upgrade.")
 
     state = _create_signed_state(
         {
@@ -51,11 +58,13 @@ def build_authorize_url(
         "redirect_uri": config.TESLA_REDIRECT_URI,
         "scope": " ".join(DEFAULT_SCOPES),
         "state": state,
-        "prompt": "login",
         "locale": "en-US",
+        # User must grant every requested scope (all integration toggles) to continue.
         "prompt_missing_scopes": "true",
         "require_requested_scopes": "true",
     }
+    if purpose == "login":
+        params["prompt"] = "login"
 
     return {
         "url": f"{config.TESLA_AUTH_URL}?{urlencode(params)}",
@@ -189,7 +198,9 @@ def list_vehicles(access_token: str) -> dict:
     return response.json()
 
 
-def get_vehicle_data(tesla_vehicle_id: str, access_token: str) -> dict:
+def get_vehicle_data(
+    tesla_vehicle_id: str, access_token: str, *, include_location: bool = True
+) -> dict:
     if config.DRY_RUN:
         return {
             "dry_run": True,
@@ -219,10 +230,13 @@ def get_vehicle_data(tesla_vehicle_id: str, access_token: str) -> dict:
             },
         }
 
-    # charge_state + drive_state + location_data (required on 2023.38+ for lat/lon when parked).
+    # location_data is required on 2023.38+ for lat/lon when parked; skip if scope not granted.
+    endpoints = "charge_state;drive_state"
+    if include_location:
+        endpoints += ";location_data"
     url = (
         f"{config.TESLA_FLEET_BASE_URL}/api/1/vehicles/{tesla_vehicle_id}/vehicle_data"
-        "?endpoints=charge_state;drive_state;location_data"
+        f"?endpoints={endpoints}"
     )
     response = requests.get(
         url,

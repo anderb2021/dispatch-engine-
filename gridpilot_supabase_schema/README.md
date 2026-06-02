@@ -8,6 +8,8 @@
 4. Paste the contents of `gridpilot_supabase_schema_v1.sql`.
 5. Click **Run**.
 6. (Telemetry feature) Run `gridpilot_supabase_schema_telemetry_flexibility.sql` in a second query to add `daily_flexibility_summaries` and extend `vehicle_snapshots`.
+7. (Marketplace qualification) Run `gridpilot_supabase_schema_marketplace_qualification.sql` for location scope columns and `marketplace_qualification` table.
+8. (Charging address) Run `gridpilot_supabase_schema_marketplace_address.sql` for street/city columns on `marketplace_qualification`.
 
 Supabase’s SQL Editor is designed for running SQL directly in the browser, and Supabase projects are full Postgres databases.
 
@@ -38,6 +40,7 @@ Tesla OAuth tokens should be written/read only from your backend using the Supab
 - vehicles
 - vehicle_snapshots (extended with `provider`, `vehicle_online` after telemetry migration)
 - daily_flexibility_summaries (telemetry migration)
+- marketplace_qualification (marketplace migration)
 - charging_sessions
 - behavior_profiles
 - participant_preferences

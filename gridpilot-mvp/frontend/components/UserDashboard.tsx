@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   BatteryCharging,
   Bell,
@@ -22,6 +22,12 @@ import {
 } from "lucide-react";
 import { logoutUser } from "@/lib/auth";
 import { BrandLogo } from "@/components/BrandLogo";
+import { MarketplaceEligibilityBanner } from "@/components/MarketplaceEligibilityBanner";
+import { MarketplaceQualificationCard } from "@/components/MarketplaceQualificationCard";
+import {
+  fallbackMarketplaceQualification,
+  type MarketplaceQualification,
+} from "@/lib/marketplaceQualification";
 import { createClient } from "@/utils/supabase/client";
 import { trackButtonClick, trackCompleteRegistration } from "@/lib/metaPixel";
 
@@ -164,6 +170,34 @@ export function UserDashboard({
   const [saved, setSaved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [marketplaceQual, setMarketplaceQual] = useState<MarketplaceQualification>(
+    fallbackMarketplaceQualification
+  );
+  const [qualLoading, setQualLoading] = useState(true);
+
+  const loadMarketplaceQualification = useCallback(async () => {
+    if (!hasTeslaConnection) {
+      setQualLoading(false);
+      return;
+    }
+    setQualLoading(true);
+    try {
+      const response = await fetch("/api/me/marketplace-qualification", {
+        cache: "no-store",
+      });
+      if (response.ok) {
+        setMarketplaceQual((await response.json()) as MarketplaceQualification);
+      }
+    } catch {
+      // Keep fallback; banner hidden unless needs_location_scope from partial data.
+    } finally {
+      setQualLoading(false);
+    }
+  }, [hasTeslaConnection]);
+
+  useEffect(() => {
+    loadMarketplaceQualification();
+  }, [loadMarketplaceQualification]);
 
   const displayName = getDisplayName(dashboardSummary?.full_name, dashboardSummary?.email);
   const firstName = displayName.split(" ")[0];
@@ -281,6 +315,17 @@ export function UserDashboard({
             {isSaving ? "Saving..." : saved ? "Preferences saved" : "Save preferences"}
           </button>
         </div>
+
+        {hasTeslaConnection && !qualLoading ? (
+          <MarketplaceEligibilityBanner qualification={marketplaceQual} />
+        ) : null}
+
+        {hasTeslaConnection ? (
+          <MarketplaceQualificationCard
+            initial={marketplaceQual}
+            onUpdated={(next) => setMarketplaceQual(next)}
+          />
+        ) : null}
 
         <div className="grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">
           <div className="space-y-5">

@@ -152,6 +152,7 @@ def normalize_snapshot(
     *,
     vehicle_online: bool = True,
     raw_override: dict[str, Any] | None = None,
+    allow_tesla_location: bool = True,
 ) -> dict[str, Any]:
     """Normalize a Tesla vehicle_data response into the vehicle_snapshots schema.
 
@@ -190,10 +191,13 @@ def normalize_snapshot(
     charging_state = charge_state.get("charging_state")
 
     # Location privacy rule: only keep coordinates while connected/charging.
-    # Tesla requires vehicle_location OAuth scope or drive_state omits lat/lon.
+    # Skip Tesla GPS entirely when vehicle_location scope was not granted.
     latitude = None
     longitude = None
-    if is_connected_or_charging(plugged_in, charging_state):
+    if (
+        allow_tesla_location
+        and is_connected_or_charging(plugged_in, charging_state)
+    ):
         latitude, longitude = extract_location_from_response(response_data)
 
     return {
@@ -459,9 +463,16 @@ def pull_location_for_user(
     try:
         access_token = repo.get_access_token(user_id)
         vehicles = repo.list_active_vehicles(user_id)
+        allow_location = repo.user_has_vehicle_location_scope(user_id)
     except Exception as exc:
         result["errors"].append(str(exc))
         return result
+
+    if not allow_location:
+        result["errors"].append(
+            f"{user_id}: vehicle_location scope not granted — user must complete "
+            "Verify charging location OAuth upgrade."
+        )
 
     if vehicle_id:
         vehicles = [
@@ -515,10 +526,15 @@ def pull_location_for_user(
                 row["attempts"] = attempt + 1
                 try:
                     payload = get_vehicle_data(
-                        tesla_vehicle_id=tesla_vehicle_id, access_token=access_token
+                        tesla_vehicle_id=tesla_vehicle_id,
+                        access_token=access_token,
+                        include_location=allow_location,
                     )
                     response_data = payload.get("response") or payload
-                    if extract_location_from_response(response_data)[0] is not None:
+                    if (
+                        allow_location
+                        and extract_location_from_response(response_data)[0] is not None
+                    ):
                         break
                     if attempt < max_attempts - 1:
                         time.sleep(5)
@@ -617,6 +633,7 @@ def poll_all_connected_vehicles(repo: "Any") -> dict[str, Any]:
             result["errors"].append(f"{user_id}: setup failed: {exc}")
             continue
 
+        allow_location = repo.user_has_vehicle_location_scope(user_id)
         refreshed = False
         for vehicle in vehicles:
             result["vehicles_polled"] += 1
@@ -624,7 +641,9 @@ def poll_all_connected_vehicles(repo: "Any") -> dict[str, Any]:
             try:
                 try:
                     payload = get_vehicle_data(
-                        tesla_vehicle_id=tesla_vehicle_id, access_token=access_token
+                        tesla_vehicle_id=tesla_vehicle_id,
+                        access_token=access_token,
+                        include_location=allow_location,
                     )
                 except TeslaOAuthError as exc:
                     message = str(exc)
@@ -641,6 +660,7 @@ def poll_all_connected_vehicles(repo: "Any") -> dict[str, Any]:
                         payload = get_vehicle_data(
                             tesla_vehicle_id=tesla_vehicle_id,
                             access_token=access_token,
+                            include_location=allow_location,
                         )
                     else:
                         raise

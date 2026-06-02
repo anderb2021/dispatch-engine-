@@ -9,6 +9,7 @@ from typing import Any
 from supabase import Client, create_client
 
 from . import config
+from . import marketplace_qualification as marketplace_lib
 from . import telemetry as telemetry_lib
 from .security import decrypt, encrypt
 from .tesla import TeslaOAuthError, refresh_access_token
@@ -36,38 +37,107 @@ class SupabaseRepo:
         if expires_in > 0:
             token_expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
 
-        payload = {
+        now = datetime.now(timezone.utc)
+        now_iso = now.isoformat()
+        granted_scopes, requested_scopes = marketplace_lib.scopes_from_token_payload(
+            token_payload
+        )
+        has_location_scope = marketplace_lib.has_vehicle_location_scope(granted_scopes)
+
+        payload: dict[str, Any] = {
             "user_id": user_id,
             "access_token_encrypted": encrypt(token_payload.get("access_token", "")),
             "refresh_token_encrypted": encrypt(token_payload.get("refresh_token", "")),
             "token_expires_at": token_expires_at,
-            "scopes": token_payload.get("scope", "").split(),
+            "scopes": granted_scopes,
+            "granted_scopes": granted_scopes,
+            "requested_scopes": requested_scopes,
+            "vehicle_location_scope_granted": has_location_scope,
+            "last_scope_check_at": now_iso,
             "status": "connected",
-            "last_sync_at": datetime.now(timezone.utc).isoformat(),
+            "last_sync_at": now_iso,
             "last_error": None,
         }
+        if has_location_scope:
+            payload["location_scope_granted_at"] = now_iso
+        payload["location_scope_requested_at"] = now_iso
 
         existing = (
             self.client.table("tesla_connections")
-            .select("id")
+            .select("id,location_scope_granted_at")
             .eq("user_id", user_id)
             .limit(1)
             .execute()
         )
 
         if existing.data:
-            response = (
-                self.client.table("tesla_connections")
-                .update(payload)
-                .eq("id", existing.data[0]["id"])
-                .execute()
-            )
+            prior = existing.data[0]
+            if has_location_scope and prior.get("location_scope_granted_at"):
+                payload.pop("location_scope_granted_at", None)
+            if prior.get("location_scope_requested_at"):
+                payload.pop("location_scope_requested_at", None)
+            response = self._upsert_tesla_connection_row(payload, existing_id=prior["id"])
         else:
-            response = self.client.table("tesla_connections").insert(payload).execute()
+            response = self._upsert_tesla_connection_row(payload)
 
-        if not response.data:
+        if not response:
             raise TeslaOAuthError("Failed to upsert tesla_connections row.")
-        return response.data[0]
+        self.sync_marketplace_qualification_flags(user_id)
+        return response
+
+    def _upsert_tesla_connection_row(
+        self, payload: dict[str, Any], existing_id: str | None = None
+    ) -> dict[str, Any] | None:
+        try:
+            if existing_id:
+                response = (
+                    self.client.table("tesla_connections")
+                    .update(payload)
+                    .eq("id", existing_id)
+                    .execute()
+                )
+            else:
+                response = self.client.table("tesla_connections").insert(payload).execute()
+            return (response.data or [None])[0]
+        except Exception:
+            # Migration may not be applied yet — fall back to legacy columns only.
+            legacy = {
+                key: value
+                for key, value in payload.items()
+                if key
+                in {
+                    "user_id",
+                    "access_token_encrypted",
+                    "refresh_token_encrypted",
+                    "token_expires_at",
+                    "scopes",
+                    "status",
+                    "last_sync_at",
+                    "last_error",
+                }
+            }
+            if existing_id:
+                response = (
+                    self.client.table("tesla_connections")
+                    .update(legacy)
+                    .eq("id", existing_id)
+                    .execute()
+                )
+            else:
+                response = self.client.table("tesla_connections").insert(legacy).execute()
+            return (response.data or [None])[0]
+
+    def user_has_vehicle_location_scope(self, user_id: str) -> bool:
+        try:
+            row = self.get_tesla_connection(user_id)
+        except TeslaOAuthError:
+            return False
+        if row.get("vehicle_location_scope_granted") is True:
+            return True
+        granted = marketplace_lib.parse_scope_list(
+            row.get("granted_scopes") or row.get("scopes")
+        )
+        return marketplace_lib.has_vehicle_location_scope(granted)
 
     def upsert_participant_preferences(
         self, user_id: str, allow_charging_management: bool
@@ -162,12 +232,17 @@ class SupabaseRepo:
     def insert_vehicle_snapshot(
         self, user_id: str, vehicle_row: dict[str, Any], telemetry_payload: dict[str, Any]
     ) -> dict[str, Any]:
-        # Normalize via the telemetry module so the location-privacy rule
-        # (coords only when plugged/charging) is applied consistently.
+        allow_location = self.user_has_vehicle_location_scope(user_id)
         snapshot = telemetry_lib.normalize_snapshot(
-            user_id, vehicle_row, telemetry_payload, vehicle_online=True
+            user_id,
+            vehicle_row,
+            telemetry_payload,
+            vehicle_online=True,
+            allow_tesla_location=allow_location,
         )
-        return self._insert_snapshot_record(snapshot)
+        row = self._insert_snapshot_record(snapshot)
+        self._update_qualification_from_snapshot(user_id, vehicle_row.get("id"), row)
+        return row
 
     def insert_offline_snapshot(
         self, user_id: str, vehicle_row: dict[str, Any], note: str | None = None
@@ -468,6 +543,343 @@ class SupabaseRepo:
         if not response.data:
             raise TeslaOAuthError("No dashboard summary found for this user.")
         return response.data[0]
+
+    def validate_user_access_token(self, access_token: str) -> str:
+        if not access_token:
+            raise TeslaOAuthError("Missing access token.")
+        try:
+            user_response = self.auth_client.auth.get_user(access_token)
+        except Exception as exc:
+            raise TeslaOAuthError("Invalid Supabase access token.") from exc
+        user = getattr(user_response, "user", None)
+        user_id = getattr(user, "id", None)
+        if not user_id:
+            raise TeslaOAuthError("Supabase token did not contain a user id.")
+        return str(user_id)
+
+    def get_marketplace_qualification_row(
+        self, user_id: str
+    ) -> dict[str, Any] | None:
+        rows = self._safe_select(
+            "marketplace_qualification",
+            "*",
+            eq_filters={"user_id": user_id},
+            limit=1,
+        )
+        return rows[0] if rows else None
+
+    def sync_marketplace_qualification_flags(self, user_id: str) -> dict[str, Any] | None:
+        has_scope = self.user_has_vehicle_location_scope(user_id)
+        has_connection = self._user_has_connected_tesla(user_id)
+        existing = self.get_marketplace_qualification_row(user_id) or {}
+        payload = {
+            "user_id": user_id,
+            "needs_location_scope": bool(has_connection and not has_scope),
+            "iso_rto": existing.get("iso_rto") or "PJM",
+        }
+        if existing.get("zip_code"):
+            payload["zip_code"] = existing.get("zip_code")
+            payload["utility_verified"] = marketplace_lib.zip_verified(existing)
+        if existing.get("utility_provider"):
+            payload["utility_provider"] = existing.get("utility_provider")
+            payload["utility_verified"] = bool(
+                str(existing.get("utility_provider") or "").strip()
+            )
+        return self._upsert_marketplace_qualification(payload)
+
+    def upsert_marketplace_qualification_user(
+        self, user_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        existing = self.get_marketplace_qualification_row(user_id) or {}
+        zip_code = str(body.get("zip_code") or existing.get("zip_code") or "").strip()
+        utility = str(
+            body.get("utility_provider") or existing.get("utility_provider") or ""
+        ).strip()
+        state = str(body.get("state") or existing.get("state") or "").strip() or None
+        pjm_zone = str(body.get("pjm_zone") or existing.get("pjm_zone") or "").strip() or None
+        address_line1 = str(
+            body.get("address_line1") or existing.get("address_line1") or ""
+        ).strip() or None
+        address_line2 = str(
+            body.get("address_line2") or existing.get("address_line2") or ""
+        ).strip() or None
+        city = str(body.get("city") or existing.get("city") or "").strip() or None
+
+        payload: dict[str, Any] = {
+            "user_id": user_id,
+            "zip_code": zip_code or None,
+            "utility_provider": utility or None,
+            "state": state,
+            "pjm_zone": pjm_zone,
+            "address_line1": address_line1,
+            "address_line2": address_line2,
+            "city": city,
+            "iso_rto": str(body.get("iso_rto") or existing.get("iso_rto") or "PJM"),
+            "utility_verified": bool(utility),
+            "needs_location_scope": not self.user_has_vehicle_location_scope(user_id)
+            if self._user_has_connected_tesla(user_id)
+            else False,
+        }
+        if zip_code:
+            payload["location_verification_method"] = (
+                existing.get("location_verification_method") or "user_zip"
+            )
+        row = self._upsert_marketplace_qualification(payload)
+        return self.build_me_marketplace_response(user_id, row)
+
+    def build_me_marketplace_response(
+        self, user_id: str, qualification: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        qual = qualification or self.get_marketplace_qualification_row(user_id) or {}
+        has_connection = self._user_has_connected_tesla(user_id)
+        has_scope = self.user_has_vehicle_location_scope(user_id)
+        has_recent = self.user_has_recent_telemetry(user_id)
+        eligible, status, action = marketplace_lib.compute_marketplace_eligibility(
+            has_tesla_connection=has_connection,
+            vehicle_location_scope_granted=has_scope,
+            qualification=qual,
+            has_recent_telemetry=has_recent,
+        )
+        update_payload = {
+            "user_id": user_id,
+            "marketplace_eligible": eligible,
+            "needs_location_scope": bool(has_connection and not has_scope),
+            "eligibility_notes": status,
+        }
+        for key in (
+            "zip_code",
+            "utility_provider",
+            "state",
+            "iso_rto",
+            "pjm_zone",
+            "address_line1",
+            "address_line2",
+            "city",
+            "charging_location_verified",
+            "utility_verified",
+            "location_verification_method",
+        ):
+            if qual.get(key) is not None:
+                update_payload[key] = qual.get(key)
+        qual = self._upsert_marketplace_qualification(update_payload) or qual
+
+        return {
+            "zip_code": qual.get("zip_code"),
+            "utility_provider": qual.get("utility_provider"),
+            "state": qual.get("state"),
+            "address_line1": qual.get("address_line1"),
+            "address_line2": qual.get("address_line2"),
+            "city": qual.get("city"),
+            "iso_rto": qual.get("iso_rto") or "PJM",
+            "pjm_zone": qual.get("pjm_zone"),
+            "vehicle_location_scope_granted": has_scope,
+            "charging_location_verified": marketplace_lib.charging_location_verified(
+                qual
+            ),
+            "utility_verified": marketplace_lib.utility_verified(qual),
+            "marketplace_eligible": eligible,
+            "needs_location_scope": bool(has_connection and not has_scope),
+            "qualification_status": status,
+            "recommended_next_action": action,
+            "recommended_next_action_label": marketplace_lib.next_action_label(action),
+        }
+
+    def _upsert_marketplace_qualification(
+        self, payload: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        try:
+            response = (
+                self.client.table("marketplace_qualification")
+                .upsert(payload, on_conflict="user_id")
+                .execute()
+            )
+            return (response.data or [None])[0]
+        except Exception:
+            return None
+
+    def _update_qualification_from_snapshot(
+        self, user_id: str, vehicle_id: str | None, snapshot: dict[str, Any]
+    ) -> None:
+        if not vehicle_id:
+            return
+        lat, lon = snapshot.get("latitude"), snapshot.get("longitude")
+        if lat is None or lon is None:
+            return
+        if not self.user_has_vehicle_location_scope(user_id):
+            return
+        history = self.get_snapshots_for_vehicle_since(
+            str(vehicle_id),
+            (datetime.now(timezone.utc) - timedelta(days=14)).isoformat(),
+            limit=200,
+        )
+        location_type = marketplace_lib.classify_charging_location(snapshot, history)
+        payload = {
+            "user_id": user_id,
+            "vehicle_id": vehicle_id,
+            "charging_location_lat": lat,
+            "charging_location_lon": lon,
+            "charging_location_verified": True,
+            "location_verification_method": "tesla_charging_location",
+            "eligibility_notes": f"charging_site:{location_type}",
+        }
+        existing = self.get_marketplace_qualification_row(user_id) or {}
+        for key in ("zip_code", "utility_provider", "state", "iso_rto", "pjm_zone"):
+            if existing.get(key):
+                payload[key] = existing.get(key)
+        self._upsert_marketplace_qualification(payload)
+        self.build_me_marketplace_response(user_id)
+
+    def _user_has_connected_tesla(self, user_id: str) -> bool:
+        rows = self._safe_select(
+            "tesla_connections",
+            "id,status",
+            eq_filters={"user_id": user_id, "status": "connected"},
+            limit=1,
+        )
+        return bool(rows)
+
+    def user_has_recent_telemetry(self, user_id: str, days: int = 7) -> bool:
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        rows = self._safe_select(
+            "vehicle_snapshots",
+            "id,captured_at",
+            eq_filters={"user_id": user_id},
+            order_column="captured_at",
+            descending=True,
+            limit=1,
+        )
+        if not rows:
+            return False
+        return _is_after(rows[0].get("captured_at"), datetime.now(timezone.utc) - timedelta(days=days))
+
+    def get_admin_marketplace_summary(self) -> dict[str, Any]:
+        connections = self._safe_select(
+            "tesla_connections",
+            "user_id,status,vehicle_location_scope_granted,granted_scopes,scopes",
+            eq_filters={"status": "connected"},
+            limit=5000,
+        )
+        qualifications = self._safe_select("marketplace_qualification", "*", limit=5000)
+        qual_by_user = {str(q.get("user_id")): q for q in qualifications if q.get("user_id")}
+
+        total = len(connections)
+        scope_enabled = 0
+        zip_verified = 0
+        utility_verified = 0
+        eligible = 0
+        needs_verification = 0
+
+        for conn in connections:
+            uid = str(conn.get("user_id") or "")
+            has_scope = bool(conn.get("vehicle_location_scope_granted")) or (
+                marketplace_lib.has_vehicle_location_scope(
+                    marketplace_lib.parse_scope_list(
+                        conn.get("granted_scopes") or conn.get("scopes")
+                    )
+                )
+            )
+            if has_scope:
+                scope_enabled += 1
+            qual = qual_by_user.get(uid, {})
+            zip_ok = marketplace_lib.zip_verified(qual)
+            util_ok = marketplace_lib.utility_verified(qual)
+            if zip_ok:
+                zip_verified += 1
+            if util_ok:
+                utility_verified += 1
+            row_eligible, _, _ = marketplace_lib.compute_marketplace_eligibility(
+                has_tesla_connection=True,
+                vehicle_location_scope_granted=has_scope,
+                qualification=qual,
+                has_recent_telemetry=self.user_has_recent_telemetry(uid),
+            )
+            if row_eligible:
+                eligible += 1
+            else:
+                needs_verification += 1
+
+        return {
+            "total_connected_users": total,
+            "vehicle_location_scope_enabled": scope_enabled,
+            "missing_location_scope": max(0, total - scope_enabled),
+            "zip_verified": zip_verified,
+            "utility_verified": utility_verified,
+            "marketplace_eligible": eligible,
+            "needs_verification": needs_verification,
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def get_admin_marketplace_users(self, limit: int = 200) -> dict[str, Any]:
+        profiles = self._safe_select(
+            "profiles",
+            "id,full_name,email",
+            order_column="created_at",
+            descending=True,
+            limit=limit,
+        )
+        connections = self._safe_select(
+            "tesla_connections",
+            "user_id,status,vehicle_location_scope_granted,granted_scopes,scopes",
+            eq_filters={"status": "connected"},
+            limit=5000,
+        )
+        conn_by_user = {str(c["user_id"]): c for c in connections if c.get("user_id")}
+        vehicles = self._safe_select(
+            "vehicles",
+            "id,user_id,display_name,model",
+            eq_filters={"is_active": True},
+            limit=5000,
+        )
+        vehicle_by_user: dict[str, dict[str, Any]] = {}
+        for vehicle in vehicles:
+            uid = str(vehicle.get("user_id") or "")
+            if uid and uid not in vehicle_by_user:
+                vehicle_by_user[uid] = vehicle
+        qualifications = self._safe_select("marketplace_qualification", "*", limit=5000)
+        qual_by_user = {str(q.get("user_id")): q for q in qualifications if q.get("user_id")}
+
+        users_out: list[dict[str, Any]] = []
+        for profile in profiles:
+            uid = str(profile.get("id") or "")
+            if uid not in conn_by_user:
+                continue
+            conn = conn_by_user[uid]
+            qual = qual_by_user.get(uid, {})
+            has_scope = bool(conn.get("vehicle_location_scope_granted")) or (
+                marketplace_lib.has_vehicle_location_scope(
+                    marketplace_lib.parse_scope_list(
+                        conn.get("granted_scopes") or conn.get("scopes")
+                    )
+                )
+            )
+            eligible, status, action = marketplace_lib.compute_marketplace_eligibility(
+                has_tesla_connection=True,
+                vehicle_location_scope_granted=has_scope,
+                qualification=qual,
+                has_recent_telemetry=self.user_has_recent_telemetry(uid),
+            )
+            vehicle = vehicle_by_user.get(uid, {})
+            users_out.append(
+                {
+                    "user_id": uid,
+                    "name": _display_name(profile.get("full_name"), profile.get("email")),
+                    "vehicle": vehicle.get("display_name")
+                    or vehicle.get("model")
+                    or "No vehicle",
+                    "zip_code": qual.get("zip_code") or "—",
+                    "utility_provider": qual.get("utility_provider") or "—",
+                    "pjm_zone": qual.get("pjm_zone") or "—",
+                    "location_scope": "Enabled" if has_scope else "Missing",
+                    "location_verification": marketplace_lib.location_verification_label(
+                        qual
+                    ),
+                    "qualification_status": status,
+                    "next_action": marketplace_lib.next_action_label(action),
+                    "marketplace_eligible": eligible,
+                }
+            )
+
+        return {"users": users_out, "count": len(users_out)}
 
     def validate_admin_access_token(self, access_token: str) -> str:
         if not access_token:

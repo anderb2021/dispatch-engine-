@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from urllib.parse import quote
@@ -6,6 +6,7 @@ from urllib.parse import quote
 from . import config
 from .tesla import (
     TeslaOAuthError,
+    REQUIRED_TESLA_SCOPES,
     build_authorize_url,
     exchange_code_for_token,
     extract_identity,
@@ -17,8 +18,6 @@ from .tesla import (
 from .supabase_repo import SupabaseRepo
 from .telemetry import poll_all_connected_vehicles, pull_location_for_user
 from .telemetry_scheduler import start_telemetry_scheduler, stop_telemetry_scheduler
-
-REQUIRED_TESLA_SCOPES = {"vehicle_charging_cmds"}
 
 app = FastAPI(title="GridPilot EBON API")
 
@@ -82,7 +81,8 @@ def _enforce_required_tesla_scopes(token_payload: dict):
         raise TeslaOAuthError(
             "Tesla connection is missing required permissions: "
             + ", ".join(sorted(missing))
-            + ". Please approve charging management in Tesla and try again."
+            + ". On the Tesla authorization page, enable every GridPilot integration "
+            + "(vehicle data, commands, charging, and location) and try again."
         )
 
 
@@ -101,6 +101,24 @@ def _refresh_tesla_tokens(repo: SupabaseRepo, user_id: str) -> str:
 
     repo.upsert_tesla_connection(user_id=user_id, token_payload=refreshed_payload)
     return repo.get_access_token(user_id)
+
+
+@app.get("/auth/tesla/location-upgrade")
+def tesla_location_upgrade(
+    user_id: str = Query(...),
+    next: str = Query("/dashboard"),
+):
+    """Soft re-authorization to add vehicle_location scope (existing users)."""
+    try:
+        data = build_authorize_url(
+            user_id=user_id,
+            purpose="location_upgrade",
+            next_path=next if next.startswith("/") else "/dashboard",
+            allow_charging_management=True,
+        )
+        return RedirectResponse(data["url"])
+    except TeslaOAuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.get("/auth/tesla/redirect")
@@ -122,7 +140,7 @@ def tesla_redirect(
 @app.get("/auth/tesla/login/redirect")
 def tesla_login_redirect(
     next: str = Query("/dashboard"),
-    allow_charging_management: bool = Query(False),
+    allow_charging_management: bool = Query(True),
 ):
     try:
         data = build_authorize_url(
@@ -171,6 +189,7 @@ def tesla_callback(
                 user_id=user_id,
                 allow_charging_management=allow_charging_management,
             )
+            repo.sync_marketplace_qualification_flags(user_id)
             access_token = quote(login_session.get("access_token") or "", safe="")
             refresh_token = quote(login_session.get("refresh_token") or "", safe="")
             next_path = quote(token_payload.get("next_path", "/dashboard"), safe="/")
@@ -186,8 +205,10 @@ def tesla_callback(
             user_id=user_id,
             allow_charging_management=allow_charging_management,
         )
+        repo.sync_marketplace_qualification_flags(user_id)
+        location_upgraded = "true" if purpose == "location_upgrade" else "false"
         return RedirectResponse(
-            f"{config.FRONTEND_CALLBACK_URL}?connected=true&dry_run={str(token_payload.get('dry_run', False)).lower()}"
+            f"{config.FRONTEND_CALLBACK_URL}?connected=true&dry_run={str(token_payload.get('dry_run', False)).lower()}&location_upgraded={location_upgraded}"
         )
     except TeslaOAuthError as exc:
         error_message = quote(str(exc), safe="")
@@ -244,18 +265,22 @@ def tesla_poll_telemetry(user_id: str = Query(...)):
         retried_after_refresh = False
         for vehicle in vehicles:
             try:
+                include_location = repo.user_has_vehicle_location_scope(user_id)
                 telemetry_payload = get_vehicle_data(
                     tesla_vehicle_id=vehicle["tesla_vehicle_id"],
                     access_token=access_token,
+                    include_location=include_location,
                 )
             except TeslaOAuthError as exc:
                 if retried_after_refresh or not _is_expired_tesla_token_error(exc):
                     raise
                 access_token = _refresh_tesla_tokens(repo, user_id)
                 retried_after_refresh = True
+                include_location = repo.user_has_vehicle_location_scope(user_id)
                 telemetry_payload = get_vehicle_data(
                     tesla_vehicle_id=vehicle["tesla_vehicle_id"],
                     access_token=access_token,
+                    include_location=include_location,
                 )
             snapshots.append(
                 repo.insert_vehicle_snapshot(
@@ -358,5 +383,59 @@ def admin_tesla_pull_location(
             vehicle_id=vehicle_id,
             wake=wake,
         )
+    except TeslaOAuthError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+def _require_user_auth(request: Request) -> str:
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing bearer token.")
+    token = auth_header.removeprefix("Bearer ").strip()
+    repo = SupabaseRepo()
+    return repo.validate_user_access_token(token)
+
+
+@app.get("/me/marketplace-qualification")
+def me_marketplace_qualification_get(request: Request):
+    try:
+        user_id = _require_user_auth(request)
+        repo = SupabaseRepo()
+        return repo.build_me_marketplace_response(user_id)
+    except TeslaOAuthError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+@app.post("/me/marketplace-qualification")
+def me_marketplace_qualification_post(
+    request: Request,
+    body: dict = Body(default={}),
+):
+    try:
+        user_id = _require_user_auth(request)
+        repo = SupabaseRepo()
+        return repo.upsert_marketplace_qualification_user(user_id, body or {})
+    except TeslaOAuthError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+@app.get("/admin/marketplace-qualification/summary")
+def admin_marketplace_summary(request: Request):
+    try:
+        access_token = _require_admin_auth(request)
+        repo = SupabaseRepo()
+        repo.validate_admin_access_token(access_token)
+        return repo.get_admin_marketplace_summary()
+    except TeslaOAuthError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+@app.get("/admin/marketplace-qualification/users")
+def admin_marketplace_users(request: Request):
+    try:
+        access_token = _require_admin_auth(request)
+        repo = SupabaseRepo()
+        repo.validate_admin_access_token(access_token)
+        return repo.get_admin_marketplace_users()
     except TeslaOAuthError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
