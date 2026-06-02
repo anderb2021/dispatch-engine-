@@ -71,3 +71,36 @@ export async function proxyAdminGet<T>(path: string): Promise<AdminApiResult<T>>
   const data = (await response.json()) as T;
   return { ok: true, data };
 }
+
+/** Proxy a POST request to the FastAPI backend with admin bearer auth. */
+export async function proxyAdminPost<T>(
+  path: string,
+  body?: Record<string, unknown>
+): Promise<AdminApiResult<T>> {
+  const auth = await requireAdminSession();
+  if ("error" in auth) {
+    return { ok: false, status: auth.status, error: auth.error };
+  }
+
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${auth.accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: body ? JSON.stringify(body) : undefined,
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    return {
+      ok: false,
+      status: response.status,
+      error: text || `Request failed (${response.status})`,
+    };
+  }
+
+  const data = (await response.json()) as T;
+  return { ok: true, data };
+}

@@ -15,7 +15,7 @@ from .tesla import (
     list_vehicles,
 )
 from .supabase_repo import SupabaseRepo
-from .telemetry import poll_all_connected_vehicles
+from .telemetry import poll_all_connected_vehicles, pull_location_for_user
 from .telemetry_scheduler import start_telemetry_scheduler, stop_telemetry_scheduler
 
 REQUIRED_TESLA_SCOPES = {"vehicle_charging_cmds"}
@@ -336,5 +336,27 @@ def admin_telemetry_poll(request: Request):
         repo = SupabaseRepo()
         repo.validate_admin_access_token(access_token)
         return poll_all_connected_vehicles(repo)
+    except TeslaOAuthError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+@app.post("/admin/tesla/pull-location")
+def admin_tesla_pull_location(
+    request: Request,
+    user_id: str = Query(...),
+    vehicle_id: str | None = Query(None),
+    wake: bool = Query(True),
+):
+    """Manually wake (optional) and pull Tesla location into vehicle_snapshots."""
+    try:
+        access_token = _require_admin_auth(request)
+        repo = SupabaseRepo()
+        repo.validate_admin_access_token(access_token)
+        return pull_location_for_user(
+            repo,
+            user_id,
+            vehicle_id=vehicle_id,
+            wake=wake,
+        )
     except TeslaOAuthError as exc:
         raise HTTPException(status_code=403, detail=str(exc))

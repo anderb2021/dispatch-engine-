@@ -96,6 +96,37 @@ def extract_drive_location(drive_state: dict[str, Any]) -> tuple[float | None, f
     return None, None
 
 
+def extract_location_from_response(response_data: dict[str, Any]) -> tuple[float | None, float | None]:
+    """Read lat/lon from vehicle_data response (drive_state and location_data endpoints)."""
+    lat, lon = extract_drive_location(response_data.get("drive_state") or {})
+    if lat is not None and lon is not None:
+        return lat, lon
+    location_data = response_data.get("location_data") or {}
+    lat = _coerce_coord(location_data.get("latitude"))
+    lon = _coerce_coord(location_data.get("longitude"))
+    if lat is not None and lon is not None and (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return lat, lon
+    return None, None
+
+
+def location_diagnostic(response_data: dict[str, Any]) -> dict[str, Any]:
+    """Admin/debug summary of what Tesla returned for location (no raw secrets)."""
+    drive_state = response_data.get("drive_state") or {}
+    location_data = response_data.get("location_data") or {}
+    lat, lon = extract_location_from_response(response_data)
+    return {
+        "tesla_latitude": lat,
+        "tesla_longitude": lon,
+        "drive_state_has_latitude": drive_state.get("latitude") is not None,
+        "drive_state_has_longitude": drive_state.get("longitude") is not None,
+        "location_data_present": bool(location_data),
+        "location_data_has_coords": (
+            location_data.get("latitude") is not None
+            and location_data.get("longitude") is not None
+        ),
+    }
+
+
 def _to_float(value: Any) -> float:
     try:
         if value is None:
@@ -163,7 +194,7 @@ def normalize_snapshot(
     latitude = None
     longitude = None
     if is_connected_or_charging(plugged_in, charging_state):
-        latitude, longitude = extract_drive_location(drive_state)
+        latitude, longitude = extract_location_from_response(response_data)
 
     return {
         "vehicle_id": vehicle_row["id"],
@@ -383,6 +414,166 @@ def summarize_daily_flexibility(
         "flexibility_score": flexibility_score,
         "dispatch_confidence": dispatch_confidence,
     }
+
+
+def _has_location_scope(scopes: Any) -> bool:
+    if isinstance(scopes, list):
+        joined = " ".join(str(scope) for scope in scopes)
+    else:
+        joined = str(scopes or "")
+    return "vehicle_location" in joined
+
+
+def pull_location_for_user(
+    repo: "Any",
+    user_id: str,
+    *,
+    vehicle_id: str | None = None,
+    wake: bool = True,
+    wait_seconds: int = 8,
+    max_attempts: int = 4,
+) -> dict[str, Any]:
+    """Admin manual location pull: optional wake, retries, snapshot insert.
+
+    Uses vehicle_data with location_data endpoint (required when parked on 2023.38+).
+    Coordinates are only persisted when the vehicle is plugged/charging (privacy rule).
+    """
+    import time
+
+    from .tesla import TeslaOAuthError, get_vehicle_data, wake_vehicle
+
+    result: dict[str, Any] = {
+        "user_id": user_id,
+        "wake": wake,
+        "has_location_scope": False,
+        "vehicles": [],
+        "errors": [],
+    }
+
+    try:
+        connection = repo.get_tesla_connection(user_id)
+        result["has_location_scope"] = _has_location_scope(connection.get("scopes"))
+    except Exception:
+        pass
+
+    try:
+        access_token = repo.get_access_token(user_id)
+        vehicles = repo.list_active_vehicles(user_id)
+    except Exception as exc:
+        result["errors"].append(str(exc))
+        return result
+
+    if vehicle_id:
+        vehicles = [
+            v
+            for v in vehicles
+            if str(v.get("id")) == vehicle_id or str(v.get("tesla_vehicle_id")) == vehicle_id
+        ]
+
+    if not vehicles:
+        result["errors"].append("No active vehicles found for this user.")
+        return result
+
+    token_refreshed = False
+    for vehicle in vehicles:
+        tesla_vehicle_id = str(vehicle.get("tesla_vehicle_id") or "")
+        row: dict[str, Any] = {
+            "vehicle_id": vehicle.get("id"),
+            "tesla_vehicle_id": tesla_vehicle_id,
+            "display_name": vehicle.get("display_name"),
+            "woke": False,
+            "attempts": 0,
+            "plugged_in": None,
+            "tesla_latitude": None,
+            "tesla_longitude": None,
+            "stored_latitude": None,
+            "stored_longitude": None,
+            "location_stored": False,
+            "diagnostic": {},
+            "note": None,
+            "error": None,
+        }
+
+        try:
+            if wake and tesla_vehicle_id:
+                try:
+                    wake_vehicle(tesla_vehicle_id, access_token)
+                    row["woke"] = True
+                    time.sleep(wait_seconds)
+                except TeslaOAuthError as exc:
+                    if token_refreshed or not _is_expired(str(exc)):
+                        raise
+                    access_token = repo.refresh_tokens_for_user(user_id)
+                    token_refreshed = True
+                    wake_vehicle(tesla_vehicle_id, access_token)
+                    row["woke"] = True
+                    time.sleep(wait_seconds)
+
+            payload: dict[str, Any] | None = None
+            last_error: str | None = None
+            for attempt in range(max_attempts):
+                row["attempts"] = attempt + 1
+                try:
+                    payload = get_vehicle_data(
+                        tesla_vehicle_id=tesla_vehicle_id, access_token=access_token
+                    )
+                    response_data = payload.get("response") or payload
+                    if extract_location_from_response(response_data)[0] is not None:
+                        break
+                    if attempt < max_attempts - 1:
+                        time.sleep(5)
+                except TeslaOAuthError as exc:
+                    last_error = str(exc)
+                    if is_offline_or_asleep_error(last_error) and attempt < max_attempts - 1:
+                        time.sleep(5)
+                        continue
+                    if not token_refreshed and _is_expired(last_error):
+                        access_token = repo.refresh_tokens_for_user(user_id)
+                        token_refreshed = True
+                        continue
+                    raise
+
+            if payload is None:
+                raise TeslaOAuthError(last_error or "vehicle_data returned no payload")
+
+            response_data = payload.get("response") or payload
+            row["plugged_in"] = derive_plugged_in(response_data.get("charge_state") or {})
+            row["diagnostic"] = location_diagnostic(response_data)
+            tesla_lat, tesla_lon = extract_location_from_response(response_data)
+            row["tesla_latitude"] = tesla_lat
+            row["tesla_longitude"] = tesla_lon
+
+            snapshot = repo.insert_vehicle_snapshot(
+                user_id=user_id, vehicle_row=vehicle, telemetry_payload=payload
+            )
+            row["stored_latitude"] = snapshot.get("latitude")
+            row["stored_longitude"] = snapshot.get("longitude")
+            row["location_stored"] = (
+                snapshot.get("latitude") is not None and snapshot.get("longitude") is not None
+            )
+
+            if tesla_lat is not None and not row["location_stored"]:
+                row["note"] = (
+                    "Tesla returned coordinates but they were not stored because the "
+                    "vehicle is not plugged in or charging (privacy rule)."
+                )
+            elif tesla_lat is None:
+                row["note"] = (
+                    "Tesla did not return coordinates. Ensure the user re-connected "
+                    "Tesla after granting vehicle_location, the car is online, and "
+                    "location_data is enabled on the vehicle."
+                )
+                if not result["has_location_scope"]:
+                    row["note"] += " Connection is missing vehicle_location scope."
+
+            repo.recompute_daily_flexibility(user_id, str(vehicle.get("id") or ""))
+        except Exception as exc:
+            row["error"] = str(exc)
+            result["errors"].append(f"{tesla_vehicle_id}: {exc}")
+
+        result["vehicles"].append(row)
+
+    return result
 
 
 # ---------------------------------------------------------------------------

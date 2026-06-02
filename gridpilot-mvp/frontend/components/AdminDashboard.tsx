@@ -8,6 +8,7 @@ import {
   Car,
   Coins,
   Gauge,
+  MapPin,
   PlugZap,
   RefreshCcw,
   Save,
@@ -54,6 +55,23 @@ type TeslaSyncResponse = {
   failedCount: number;
   results?: TeslaSyncResult[];
   error?: string;
+};
+
+type LocationPullVehicle = {
+  display_name?: string;
+  plugged_in?: boolean | null;
+  tesla_latitude?: number | null;
+  tesla_longitude?: number | null;
+  location_stored?: boolean;
+  note?: string | null;
+  error?: string | null;
+};
+
+type LocationPullResponse = {
+  users_polled?: number;
+  has_location_scope?: boolean;
+  vehicles?: LocationPullVehicle[];
+  errors?: string[];
 };
 
 const fallbackAdminData = {
@@ -218,6 +236,9 @@ export function AdminDashboard() {
   const [isLoadingFlexAnalytics, setIsLoadingFlexAnalytics] = useState(true);
   const [flexAnalyticsError, setFlexAnalyticsError] = useState<string | null>(null);
   const [usingFlexFallback, setUsingFlexFallback] = useState(false);
+  const [isPullingLocationAll, setIsPullingLocationAll] = useState(false);
+  const [pullingLocationUserId, setPullingLocationUserId] = useState<string | null>(null);
+  const [locationStatusMessage, setLocationStatusMessage] = useState<string | null>(null);
 
   const loadTelemetry = useCallback(async () => {
     setIsLoadingTelemetry(true);
@@ -323,6 +344,78 @@ export function AdminDashboard() {
       setSyncStatusMessage(message);
     } finally {
       setIsSyncingAllTesla(false);
+    }
+  }
+
+  async function pullLocationForAllUsers() {
+    if (isPullingLocationAll) return;
+    setLocationStatusMessage(null);
+    setIsPullingLocationAll(true);
+    try {
+      const response = await fetch("/api/admin/tesla-pull-location", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "all", wake: true }),
+      });
+      const payload = (await response.json()) as LocationPullResponse;
+      if (!response.ok) {
+        throw new Error((payload as { error?: string }).error || `Pull failed (${response.status})`);
+      }
+      const stored = (payload.vehicles ?? []).filter((v) => v.location_stored).length;
+      const total = payload.vehicles?.length ?? 0;
+      setLocationStatusMessage(
+        `Location pull finished: stored for ${stored}/${total} vehicles.` +
+          (payload.has_location_scope === false
+            ? " Some users may need to re-connect Tesla (vehicle_location scope)."
+            : "")
+      );
+      await loadFlexAnalytics();
+    } catch (error) {
+      setLocationStatusMessage(
+        error instanceof Error ? error.message : "Unable to pull Tesla location."
+      );
+    } finally {
+      setIsPullingLocationAll(false);
+    }
+  }
+
+  async function pullLocationForUser(userId?: string) {
+    if (!userId || pullingLocationUserId) return;
+    setLocationStatusMessage(null);
+    setPullingLocationUserId(userId);
+    try {
+      const response = await fetch("/api/admin/tesla-pull-location", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "user", userId, wake: true }),
+      });
+      const payload = (await response.json()) as LocationPullResponse;
+      if (!response.ok) {
+        throw new Error((payload as { error?: string }).error || `Pull failed (${response.status})`);
+      }
+      const vehicle = payload.vehicles?.[0];
+      if (vehicle?.location_stored) {
+        setLocationStatusMessage(
+          `Location stored for ${vehicle.display_name ?? "vehicle"} (plugged in: ${
+            vehicle.plugged_in ? "yes" : "no"
+          }).`
+        );
+      } else if (vehicle?.tesla_latitude != null) {
+        setLocationStatusMessage(vehicle.note ?? "Tesla returned location but it was not stored.");
+      } else {
+        setLocationStatusMessage(
+          vehicle?.note ??
+            vehicle?.error ??
+            "No location returned. Re-connect Tesla with location permission while plugged in."
+        );
+      }
+      await loadFlexAnalytics();
+    } catch (error) {
+      setLocationStatusMessage(
+        error instanceof Error ? error.message : "Unable to pull Tesla location."
+      );
+    } finally {
+      setPullingLocationUserId(null);
     }
   }
 
@@ -521,6 +614,25 @@ export function AdminDashboard() {
               {usingFlexFallback ? " Precise coordinates are never shown here." : ""}
             </p>
           ) : null}
+          {locationStatusMessage ? (
+            <p className="mt-3 text-sm text-grid-800">{locationStatusMessage}</p>
+          ) : null}
+
+          <div className="mt-4 flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={pullLocationForAllUsers}
+              disabled={isPullingLocationAll}
+              className="inline-flex items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <MapPin className="h-4 w-4" />
+              {isPullingLocationAll ? "Pulling location..." : "Pull location (wake + sync)"}
+            </button>
+            <p className="text-xs text-slate-500 self-center max-w-xl">
+              Wakes each vehicle, requests Tesla location_data, and saves coordinates to Supabase
+              when plugged in. Users must re-connect Tesla if vehicle_location scope is missing.
+            </p>
+          </div>
 
           <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
@@ -801,13 +913,25 @@ export function AdminDashboard() {
                           ${user.rewards.toFixed(2)}
                         </td>
                         <td className="px-4 py-4">
-                          <button
-                            onClick={() => syncTeslaForUser(user.userId)}
-                            disabled={!user.userId || syncingUserId === user.userId}
-                            className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            {syncingUserId === user.userId ? "Syncing..." : "Sync"}
-                          </button>
+                          <div className="flex flex-wrap gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => syncTeslaForUser(user.userId)}
+                              disabled={!user.userId || syncingUserId === user.userId}
+                              className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {syncingUserId === user.userId ? "Syncing..." : "Sync"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => pullLocationForUser(user.userId)}
+                              disabled={!user.userId || pullingLocationUserId === user.userId}
+                              className="rounded-full bg-grid-50 px-3 py-1.5 text-xs font-semibold text-grid-800 transition hover:bg-grid-100 disabled:cursor-not-allowed disabled:opacity-60"
+                              title="Wake vehicle and pull location from Tesla"
+                            >
+                              {pullingLocationUserId === user.userId ? "..." : "Location"}
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}

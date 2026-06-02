@@ -209,16 +209,20 @@ def get_vehicle_data(tesla_vehicle_id: str, access_token: str) -> dict:
                     "latitude": 37.3947,
                     "longitude": -122.1503,
                 },
+                "location_data": {
+                    "latitude": 37.3947,
+                    "longitude": -122.1503,
+                },
                 "vehicle_state": {
                     "odometer": 12034.6,
                 },
             },
         }
 
-    # Request charge + drive endpoints explicitly so drive_state (location) is included.
+    # charge_state + drive_state + location_data (required on 2023.38+ for lat/lon when parked).
     url = (
         f"{config.TESLA_FLEET_BASE_URL}/api/1/vehicles/{tesla_vehicle_id}/vehicle_data"
-        "?endpoints=charge_state;drive_state"
+        "?endpoints=charge_state;drive_state;location_data"
     )
     response = requests.get(
         url,
@@ -228,6 +232,24 @@ def get_vehicle_data(tesla_vehicle_id: str, access_token: str) -> dict:
     if response.status_code >= 400:
         raise TeslaOAuthError(
             f"Tesla vehicle_data request failed: {response.status_code} {response.text}"
+        )
+    return response.json()
+
+
+def wake_vehicle(tesla_vehicle_id: str, access_token: str) -> dict:
+    """Wake an asleep/offline vehicle so a live vehicle_data call can succeed."""
+    if config.DRY_RUN:
+        return {"dry_run": True, "state": "online"}
+
+    url = f"{config.TESLA_FLEET_BASE_URL}/api/1/vehicles/{tesla_vehicle_id}/wake_up"
+    response = requests.post(
+        url,
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=45,
+    )
+    if response.status_code >= 400:
+        raise TeslaOAuthError(
+            f"Tesla wake_up request failed: {response.status_code} {response.text}"
         )
     return response.json()
 
