@@ -15,6 +15,8 @@ from .tesla import (
     list_vehicles,
 )
 from .supabase_repo import SupabaseRepo
+from .telemetry import poll_all_connected_vehicles
+from .telemetry_scheduler import start_telemetry_scheduler, stop_telemetry_scheduler
 
 REQUIRED_TESLA_SCOPES = {"vehicle_charging_cmds"}
 
@@ -39,6 +41,16 @@ def root():
 @app.get("/health")
 def health():
     return {"healthy": True}
+
+
+@app.on_event("startup")
+def startup_telemetry_scheduler():
+    start_telemetry_scheduler()
+
+
+@app.on_event("shutdown")
+def shutdown_telemetry_scheduler():
+    stop_telemetry_scheduler()
 
 
 def _require_admin_auth(request: Request):
@@ -279,5 +291,50 @@ def admin_telemetry(request: Request):
         repo = SupabaseRepo()
         repo.validate_admin_access_token(access_token)
         return repo.get_admin_telemetry()
+    except TeslaOAuthError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+@app.get("/admin/telemetry/summary")
+def admin_telemetry_summary(request: Request):
+    try:
+        access_token = _require_admin_auth(request)
+        repo = SupabaseRepo()
+        repo.validate_admin_access_token(access_token)
+        return repo.get_telemetry_summary()
+    except TeslaOAuthError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+@app.get("/admin/telemetry/recent")
+def admin_telemetry_recent(request: Request):
+    try:
+        access_token = _require_admin_auth(request)
+        repo = SupabaseRepo()
+        repo.validate_admin_access_token(access_token)
+        return repo.get_recent_snapshots(limit=50)
+    except TeslaOAuthError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+@app.get("/admin/flexibility/daily")
+def admin_flexibility_daily(request: Request):
+    try:
+        access_token = _require_admin_auth(request)
+        repo = SupabaseRepo()
+        repo.validate_admin_access_token(access_token)
+        return repo.get_daily_flexibility(days=7)
+    except TeslaOAuthError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+@app.post("/admin/telemetry/poll")
+def admin_telemetry_poll(request: Request):
+    """Manual trigger for the same 15-minute polling job (admin only)."""
+    try:
+        access_token = _require_admin_auth(request)
+        repo = SupabaseRepo()
+        repo.validate_admin_access_token(access_token)
+        return poll_all_connected_vehicles(repo)
     except TeslaOAuthError as exc:
         raise HTTPException(status_code=403, detail=str(exc))

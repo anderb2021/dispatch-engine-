@@ -9,8 +9,9 @@ from typing import Any
 from supabase import Client, create_client
 
 from . import config
+from . import telemetry as telemetry_lib
 from .security import decrypt, encrypt
-from .tesla import TeslaOAuthError
+from .tesla import TeslaOAuthError, refresh_access_token
 
 
 class SupabaseRepo:
@@ -161,31 +162,300 @@ class SupabaseRepo:
     def insert_vehicle_snapshot(
         self, user_id: str, vehicle_row: dict[str, Any], telemetry_payload: dict[str, Any]
     ) -> dict[str, Any]:
-        response_data = telemetry_payload.get("response") or telemetry_payload
-        charge_state = response_data.get("charge_state") or {}
-        drive_state = response_data.get("drive_state") or {}
+        # Normalize via the telemetry module so the location-privacy rule
+        # (coords only when plugged/charging) is applied consistently.
+        snapshot = telemetry_lib.normalize_snapshot(
+            user_id, vehicle_row, telemetry_payload, vehicle_online=True
+        )
+        return self._insert_snapshot_record(snapshot)
 
-        snapshot = {
-            "vehicle_id": vehicle_row["id"],
-            "user_id": user_id,
-            "battery_level": charge_state.get("battery_level"),
-            "charging_state": charge_state.get("charging_state"),
-            "plugged_in": bool(charge_state.get("charge_port_door_open")),
-            "charge_limit_soc": charge_state.get("charge_limit_soc"),
-            "charger_power_kw": charge_state.get("charger_power"),
-            "charger_voltage": charge_state.get("charger_voltage"),
-            "charger_current": charge_state.get("charger_actual_current"),
-            "time_to_full_charge_hours": charge_state.get("time_to_full_charge"),
-            "latitude": drive_state.get("latitude"),
-            "longitude": drive_state.get("longitude"),
-            "odometer": vehicle_state_to_odometer(response_data),
-            "raw_payload": response_data,
+    def insert_offline_snapshot(
+        self, user_id: str, vehicle_row: dict[str, Any], note: str | None = None
+    ) -> dict[str, Any]:
+        # Records that a poll happened but the car was asleep/offline. We do not
+        # force-wake the vehicle (reserved for active dispatch events).
+        snapshot = telemetry_lib.normalize_snapshot(
+            user_id,
+            vehicle_row,
+            None,
+            vehicle_online=False,
+            raw_override={"vehicle_online": False, "note": note} if note else None,
+        )
+        return self._insert_snapshot_record(snapshot)
+
+    def _insert_snapshot_record(self, record: dict[str, Any]) -> dict[str, Any]:
+        try:
+            response = self.client.table("vehicle_snapshots").insert(record).execute()
+            if response.data:
+                return response.data[0]
+        except Exception:
+            # The provider/vehicle_online columns may not be migrated yet.
+            # Retry with the original v1 column set so polling never breaks.
+            reduced = {
+                key: value
+                for key, value in record.items()
+                if key not in {"provider", "vehicle_online"}
+            }
+            response = self.client.table("vehicle_snapshots").insert(reduced).execute()
+            if response.data:
+                return response.data[0]
+        raise TeslaOAuthError("Failed to insert vehicle snapshot.")
+
+    # ------------------------------------------------------------------
+    # Telemetry polling + flexibility analytics (modular MVP feature).
+    # ------------------------------------------------------------------
+
+    def list_connected_user_ids(self) -> list[str]:
+        rows = self._safe_select(
+            "tesla_connections",
+            "user_id,status",
+            eq_filters={"status": "connected"},
+            limit=5000,
+        )
+        ordered: list[str] = []
+        for row in rows:
+            uid = row.get("user_id")
+            if uid and uid not in ordered:
+                ordered.append(uid)
+        return ordered
+
+    def refresh_tokens_for_user(self, user_id: str) -> str:
+        existing_refresh_token = self.get_refresh_token(user_id)
+        refreshed_payload = refresh_access_token(existing_refresh_token)
+        if not refreshed_payload.get("refresh_token"):
+            refreshed_payload["refresh_token"] = existing_refresh_token
+        self.upsert_tesla_connection(user_id=user_id, token_payload=refreshed_payload)
+        return self.get_access_token(user_id)
+
+    def get_snapshots_for_vehicle_since(
+        self, vehicle_id: str, since_iso: str, limit: int = 2000
+    ) -> list[dict[str, Any]]:
+        try:
+            response = (
+                self.client.table("vehicle_snapshots")
+                .select(
+                    "id,vehicle_id,user_id,captured_at,plugged_in,charging_state,"
+                    "charger_power_kw,latitude,longitude"
+                )
+                .eq("vehicle_id", vehicle_id)
+                .gte("captured_at", since_iso)
+                .order("captured_at", desc=False)
+                .limit(limit)
+                .execute()
+            )
+            return response.data or []
+        except Exception:
+            return []
+
+    def recompute_daily_flexibility(
+        self, user_id: str, vehicle_id: str, summary_date: str | None = None
+    ) -> dict[str, Any] | None:
+        now = datetime.now(timezone.utc)
+        if summary_date is None:
+            summary_date = now.date().isoformat()
+        # Recompute the running UTC day from its midnight boundary.
+        day_start = datetime.fromisoformat(summary_date).replace(tzinfo=timezone.utc)
+        snapshots = self.get_snapshots_for_vehicle_since(
+            vehicle_id, day_start.isoformat()
+        )
+        summary = telemetry_lib.summarize_daily_flexibility(
+            user_id, vehicle_id, summary_date, snapshots, now=now
+        )
+        if summary is None:
+            return None
+        return self.upsert_daily_flexibility_summary(summary)
+
+    def upsert_daily_flexibility_summary(
+        self, record: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        try:
+            response = (
+                self.client.table("daily_flexibility_summaries")
+                .upsert(record, on_conflict="vehicle_id,summary_date")
+                .execute()
+            )
+            return (response.data or [None])[0]
+        except Exception:
+            # Table may not be migrated yet; do not break polling.
+            return None
+
+    def get_telemetry_summary(self) -> dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        day_ago = now - timedelta(hours=24)
+        recent_window = now - timedelta(hours=2)
+        today = now.date().isoformat()
+
+        vehicles = self._safe_select(
+            "vehicles",
+            "id,user_id,controllable_kw,is_active",
+            eq_filters={"is_active": True},
+            limit=5000,
+        )
+        snapshots = self._safe_select(
+            "vehicle_snapshots",
+            "id,vehicle_id,user_id,captured_at,plugged_in,charging_state,charger_power_kw",
+            order_column="captured_at",
+            descending=True,
+            limit=5000,
+        )
+        daily = self._safe_select(
+            "daily_flexibility_summaries",
+            "vehicle_id,summary_date,estimated_flexible_kwh,flexibility_score",
+            limit=5000,
+        )
+
+        controllable_by_vehicle = {
+            v.get("id"): _to_float(v.get("controllable_kw"))
+            for v in vehicles
+            if v.get("id")
         }
 
-        response = self.client.table("vehicle_snapshots").insert(snapshot).execute()
-        if not response.data:
-            raise TeslaOAuthError("Failed to insert vehicle snapshot.")
-        return response.data[0]
+        latest_by_vehicle: dict[str, dict[str, Any]] = {}
+        for snapshot in snapshots:
+            vid = snapshot.get("vehicle_id")
+            if vid and vid not in latest_by_vehicle:
+                latest_by_vehicle[vid] = snapshot
+
+        snaps_last_24h = [s for s in snapshots if _is_after(s.get("captured_at"), day_ago)]
+        active_vehicle_count_24h = len(
+            {s.get("vehicle_id") for s in snaps_last_24h if s.get("vehicle_id")}
+        )
+
+        plugged_in_now = 0
+        charging_now = 0
+        dispatchable_kw = 0.0
+        for vid, snapshot in latest_by_vehicle.items():
+            # "Now" only counts vehicles whose latest snapshot is fresh (<= 2h).
+            if not _is_after(snapshot.get("captured_at"), recent_window):
+                continue
+            charging_state = snapshot.get("charging_state")
+            power = _to_float(snapshot.get("charger_power_kw"))
+            if snapshot.get("plugged_in"):
+                plugged_in_now += 1
+                # Dispatchable kW estimate: prefer the vehicle's controllable_kw,
+                # fall back to the live charger power.
+                dispatchable_kw += controllable_by_vehicle.get(vid, 0.0) or power
+            if power > 0 or (
+                isinstance(charging_state, str)
+                and charging_state.strip().lower() == "charging"
+            ):
+                charging_now += 1
+
+        most_recent = _parse_datetime(snapshots[0].get("captured_at")) if snapshots else None
+        telemetry_lag_minutes = (
+            round((now - most_recent).total_seconds() / 60.0, 1) if most_recent else None
+        )
+
+        flexible_today = sum(
+            _to_float(d.get("estimated_flexible_kwh"))
+            for d in daily
+            if str(d.get("summary_date")) == today
+        )
+        flex_scores_today = [
+            _to_float(d.get("flexibility_score"))
+            for d in daily
+            if str(d.get("summary_date")) == today and d.get("flexibility_score") is not None
+        ]
+
+        return {
+            "connected_vehicle_count": len(vehicles),
+            "active_vehicle_count_24h": active_vehicle_count_24h,
+            "plugged_in_now": plugged_in_now,
+            "charging_now": charging_now,
+            "estimated_dispatchable_kw": round(dispatchable_kw, 1),
+            "estimated_flexible_kwh_today": round(flexible_today, 1),
+            "avg_flexibility_score": round(_avg(flex_scores_today), 1)
+            if flex_scores_today
+            else 0.0,
+            "telemetry_lag_minutes": telemetry_lag_minutes,
+            "snapshots_last_24h": len(snaps_last_24h),
+            "generatedAt": now.isoformat(),
+        }
+
+    def get_recent_snapshots(self, limit: int = 50) -> dict[str, Any]:
+        snapshots = self._safe_select(
+            "vehicle_snapshots",
+            "id,vehicle_id,user_id,captured_at,battery_level,charging_state,"
+            "plugged_in,charger_power_kw,latitude,longitude,vehicle_online",
+            order_column="captured_at",
+            descending=True,
+            limit=limit,
+        )
+        vehicles = self._safe_select("vehicles", "id,display_name,model", limit=5000)
+        name_by_id = {
+            v.get("id"): (v.get("display_name") or v.get("model") or "Vehicle")
+            for v in vehicles
+            if v.get("id")
+        }
+
+        rows: list[dict[str, Any]] = []
+        for snapshot in snapshots:
+            # Privacy: never return raw coordinates here. Only a boolean flag.
+            location_captured = (
+                snapshot.get("latitude") is not None
+                and snapshot.get("longitude") is not None
+            )
+            online = snapshot.get("vehicle_online")
+            rows.append(
+                {
+                    "id": str(snapshot.get("id")),
+                    "vehicle": name_by_id.get(snapshot.get("vehicle_id"), "Vehicle"),
+                    "battery": round(_to_float(snapshot.get("battery_level"))),
+                    "chargingState": snapshot.get("charging_state")
+                    or ("Offline" if online is False else "Unknown"),
+                    "powerKw": round(_to_float(snapshot.get("charger_power_kw")), 1),
+                    "pluggedIn": bool(snapshot.get("plugged_in")),
+                    "lastSeen": snapshot.get("captured_at"),
+                    "locationCaptured": location_captured,
+                }
+            )
+        return {"snapshots": rows, "count": len(rows)}
+
+    def get_daily_flexibility(self, days: int = 7) -> dict[str, Any]:
+        since = (datetime.now(timezone.utc).date() - timedelta(days=days - 1)).isoformat()
+        rows = self._safe_select(
+            "daily_flexibility_summaries",
+            "summary_date,vehicle_id,user_id,total_plugged_minutes,"
+            "total_charging_minutes,idle_plugged_minutes,avg_charger_power_kw,"
+            "estimated_energy_delivered_kwh,estimated_flexible_kwh,"
+            "flexibility_score,dispatch_confidence",
+            limit=5000,
+        )
+        rows = [r for r in rows if str(r.get("summary_date", "")) >= since]
+
+        by_date: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            date_key = row.get("summary_date")
+            if not date_key:
+                continue
+            agg = by_date.setdefault(
+                str(date_key),
+                {"flexibleKwh": 0.0, "active": 0, "flexScores": [], "confidences": []},
+            )
+            agg["active"] += 1
+            agg["flexibleKwh"] += _to_float(row.get("estimated_flexible_kwh"))
+            if row.get("flexibility_score") is not None:
+                agg["flexScores"].append(_to_float(row.get("flexibility_score")))
+            if row.get("dispatch_confidence") is not None:
+                agg["confidences"].append(_to_float(row.get("dispatch_confidence")))
+
+        days_out = []
+        for date_key in sorted(by_date.keys(), reverse=True):
+            agg = by_date[date_key]
+            days_out.append(
+                {
+                    "date": date_key,
+                    "activeVehicles": agg["active"],
+                    "flexibleKwh": round(agg["flexibleKwh"], 1),
+                    "avgFlexScore": round(_avg(agg["flexScores"]), 1)
+                    if agg["flexScores"]
+                    else 0.0,
+                    "dispatchConfidence": round(_avg(agg["confidences"]), 3)
+                    if agg["confidences"]
+                    else 0.0,
+                }
+            )
+        return {"days": days_out}
 
     def get_dashboard_summary(self, user_id: str) -> dict[str, Any]:
         response = (

@@ -21,6 +21,10 @@ FRONTEND_TESLA_LOGIN_CALLBACK_URL = os.getenv(
     "FRONTEND_TESLA_LOGIN_CALLBACK_URL", "http://localhost:3000/auth/tesla/callback"
 )
 DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
+# Background Tesla telemetry polling (15-minute interval). Set to false to disable.
+TELEMETRY_POLLING_ENABLED = (
+    os.getenv("TELEMETRY_POLLING_ENABLED", "true").lower() == "true"
+)
 
 TESLA_AUTH_URL = "https://auth.tesla.com/oauth2/v3/authorize"
 TESLA_TOKEN_URL = "https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token"

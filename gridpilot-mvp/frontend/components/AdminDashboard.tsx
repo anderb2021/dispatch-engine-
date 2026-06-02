@@ -18,6 +18,14 @@ import {
   WalletCards,
 } from "lucide-react";
 import { BrandLogo } from "@/components/BrandLogo";
+import {
+  fallbackDailyFlex,
+  fallbackRecentSnapshots,
+  fallbackTelemetrySummary,
+  type DailyFlexRow,
+  type RecentSnapshotRow,
+  type TelemetrySummary,
+} from "@/lib/telemetryAnalytics";
 
 type AdminUser = {
   id: string;
@@ -204,6 +212,12 @@ export function AdminDashboard() {
   const [syncingUserId, setSyncingUserId] = useState<string | null>(null);
   const [syncStatusMessage, setSyncStatusMessage] = useState<string | null>(null);
   const [syncErrors, setSyncErrors] = useState<TeslaSyncResult[]>([]);
+  const [telemetrySummary, setTelemetrySummary] = useState<TelemetrySummary | null>(null);
+  const [recentSnapshots, setRecentSnapshots] = useState<RecentSnapshotRow[]>([]);
+  const [dailyFlex, setDailyFlex] = useState<DailyFlexRow[]>([]);
+  const [isLoadingFlexAnalytics, setIsLoadingFlexAnalytics] = useState(true);
+  const [flexAnalyticsError, setFlexAnalyticsError] = useState<string | null>(null);
+  const [usingFlexFallback, setUsingFlexFallback] = useState(false);
 
   const loadTelemetry = useCallback(async () => {
     setIsLoadingTelemetry(true);
@@ -228,11 +242,56 @@ export function AdminDashboard() {
     }
   }, []);
 
+  const loadFlexAnalytics = useCallback(async () => {
+    setIsLoadingFlexAnalytics(true);
+    setFlexAnalyticsError(null);
+    let usedFallback = false;
+
+    const [summaryRes, recentRes, dailyRes] = await Promise.all([
+      fetch("/api/admin/telemetry/summary", { cache: "no-store" }),
+      fetch("/api/admin/telemetry/recent", { cache: "no-store" }),
+      fetch("/api/admin/flexibility/daily", { cache: "no-store" }),
+    ]);
+
+    if (summaryRes.ok) {
+      setTelemetrySummary((await summaryRes.json()) as TelemetrySummary);
+    } else {
+      usedFallback = true;
+      setTelemetrySummary(fallbackTelemetrySummary);
+    }
+
+    if (recentRes.ok) {
+      const payload = (await recentRes.json()) as { snapshots?: RecentSnapshotRow[] };
+      setRecentSnapshots(payload.snapshots ?? fallbackRecentSnapshots);
+    } else {
+      usedFallback = true;
+      setRecentSnapshots(fallbackRecentSnapshots);
+    }
+
+    if (dailyRes.ok) {
+      const payload = (await dailyRes.json()) as { days?: DailyFlexRow[] };
+      setDailyFlex(payload.days ?? fallbackDailyFlex);
+    } else {
+      usedFallback = true;
+      setDailyFlex(fallbackDailyFlex);
+    }
+
+    if (usedFallback) {
+      setFlexAnalyticsError("Telemetry analytics API unavailable. Showing sample data.");
+    }
+    setUsingFlexFallback(usedFallback);
+    setIsLoadingFlexAnalytics(false);
+  }, []);
+
   useEffect(() => {
     loadTelemetry();
-  }, [loadTelemetry]);
+    loadFlexAnalytics();
+  }, [loadTelemetry, loadFlexAnalytics]);
 
   const data: AdminTelemetry = telemetry ?? fallbackAdminData;
+  const flexSummary = telemetrySummary ?? fallbackTelemetrySummary;
+  const flexRecent = recentSnapshots.length ? recentSnapshots : fallbackRecentSnapshots;
+  const flexDaily = dailyFlex.length ? dailyFlex : fallbackDailyFlex;
 
   const filteredUsers: AdminUser[] = data.users.filter((user) =>
     `${user.name} ${user.vehicle} ${user.id}`.toLowerCase().includes(search.toLowerCase())
@@ -343,11 +402,14 @@ export function AdminDashboard() {
               {isSyncingAllTesla ? "Syncing Tesla..." : "Sync all Tesla data"}
             </button>
             <button
-              onClick={loadTelemetry}
+              onClick={() => {
+                loadTelemetry();
+                loadFlexAnalytics();
+              }}
               className="inline-flex items-center justify-center gap-2 rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
             >
               <RefreshCcw className="h-4 w-4" />
-              {isLoadingTelemetry ? "Refreshing..." : "Refresh network"}
+              {isLoadingTelemetry || isLoadingFlexAnalytics ? "Refreshing..." : "Refresh network"}
             </button>
           </div>
         </div>
@@ -431,6 +493,169 @@ export function AdminDashboard() {
             caption="Behavior engine estimate"
             icon={<WalletCards className="h-6 w-6" />}
           />
+        </div>
+
+        {/* Telemetry & Flexibility Analytics — additive section; does not move existing layout. */}
+        <div className="mt-8 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+          <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-950">
+                Telemetry &amp; Flexibility Analytics
+              </h2>
+              <p className="text-sm text-slate-500">
+                Tesla fleet charging telemetry (15-min polls) and rule-based flexibility estimates.
+              </p>
+            </div>
+            {isLoadingFlexAnalytics ? (
+              <span className="text-sm text-slate-500">Loading analytics...</span>
+            ) : flexSummary.generatedAt ? (
+              <span className="text-sm text-slate-500">
+                Updated {new Date(flexSummary.generatedAt).toLocaleString()}
+              </span>
+            ) : null}
+          </div>
+
+          {flexAnalyticsError ? (
+            <p className="mt-3 text-sm text-amber-700">
+              {flexAnalyticsError}
+              {usingFlexFallback ? " Precise coordinates are never shown here." : ""}
+            </p>
+          ) : null}
+
+          <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <StatCard
+              label="Connected vehicles"
+              value={`${flexSummary.connected_vehicle_count}`}
+              caption="Active Tesla-linked"
+              icon={<Car className="h-6 w-6" />}
+            />
+            <StatCard
+              label="Active last 24h"
+              value={`${flexSummary.active_vehicle_count_24h}`}
+              caption={`${flexSummary.snapshots_last_24h} snapshots`}
+              icon={<Activity className="h-6 w-6" />}
+            />
+            <StatCard
+              label="Plugged in now"
+              value={`${flexSummary.plugged_in_now}`}
+              caption={`${flexSummary.charging_now} charging`}
+              icon={<PlugZap className="h-6 w-6" />}
+            />
+            <StatCard
+              label="Telemetry lag"
+              value={
+                flexSummary.telemetry_lag_minutes != null
+                  ? `${flexSummary.telemetry_lag_minutes} min`
+                  : "—"
+              }
+              caption="Since last fleet snapshot"
+              icon={<Gauge className="h-6 w-6" />}
+            />
+            <StatCard
+              label="Dispatchable kW"
+              value={`${flexSummary.estimated_dispatchable_kw.toFixed(1)}`}
+              caption="Plugged-in estimate"
+              icon={<PlugZap className="h-6 w-6" />}
+            />
+            <StatCard
+              label="Flexible kWh today"
+              value={`${flexSummary.estimated_flexible_kwh_today.toFixed(1)}`}
+              caption="Idle-plugged MVP"
+              icon={<BatteryCharging className="h-6 w-6" />}
+            />
+            <StatCard
+              label="Avg flexibility score"
+              value={`${flexSummary.avg_flexibility_score}`}
+              caption="0–100 rule-based"
+              icon={<WalletCards className="h-6 w-6" />}
+            />
+            <StatCard
+              dark
+              label="Charging now"
+              value={`${flexSummary.charging_now}`}
+              caption="Live charger power &gt; 0"
+              icon={<BatteryCharging className="h-6 w-6" />}
+            />
+          </div>
+
+          <div className="mt-6 grid gap-5 lg:grid-cols-2">
+            <div>
+              <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-500">
+                Recent telemetry
+              </h3>
+              <p className="mt-1 text-xs text-slate-500">
+                Location column shows capture status only (utility/PJM eligibility uses stored
+                coordinates server-side).
+              </p>
+              <div className="mt-3 overflow-hidden rounded-2xl border border-slate-200">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
+                    <tr>
+                      <th className="px-3 py-2">Vehicle</th>
+                      <th className="px-3 py-2">Battery</th>
+                      <th className="px-3 py-2">State</th>
+                      <th className="px-3 py-2">kW</th>
+                      <th className="px-3 py-2">Plugged</th>
+                      <th className="px-3 py-2">Last seen</th>
+                      <th className="px-3 py-2">Location</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 bg-white">
+                    {flexRecent.slice(0, 12).map((row) => (
+                      <tr key={row.id} className="hover:bg-slate-50">
+                        <td className="px-3 py-3 font-medium text-slate-900">{row.vehicle}</td>
+                        <td className="px-3 py-3">{row.battery}%</td>
+                        <td className="px-3 py-3 text-slate-600">{row.chargingState}</td>
+                        <td className="px-3 py-3">{row.powerKw.toFixed(1)}</td>
+                        <td className="px-3 py-3">{row.pluggedIn ? "Yes" : "No"}</td>
+                        <td className="px-3 py-3 text-xs text-slate-500">
+                          {formatEventTime(row.lastSeen)}
+                        </td>
+                        <td className="px-3 py-3 text-xs font-medium text-slate-700">
+                          {row.locationCaptured ? "Captured" : "Not captured"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div>
+              <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-500">
+                7-day flexibility
+              </h3>
+              <p className="mt-1 text-xs text-slate-500">
+                Daily aggregates from charging snapshots (no driving history).
+              </p>
+              <div className="mt-3 overflow-hidden rounded-2xl border border-slate-200">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
+                    <tr>
+                      <th className="px-3 py-2">Date</th>
+                      <th className="px-3 py-2">Active</th>
+                      <th className="px-3 py-2">Flex kWh</th>
+                      <th className="px-3 py-2">Score</th>
+                      <th className="px-3 py-2">Confidence</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 bg-white">
+                    {flexDaily.slice(0, 7).map((row) => (
+                      <tr key={row.date} className="hover:bg-slate-50">
+                        <td className="px-3 py-3 font-medium text-slate-900">{row.date}</td>
+                        <td className="px-3 py-3">{row.activeVehicles}</td>
+                        <td className="px-3 py-3">{row.flexibleKwh.toFixed(1)}</td>
+                        <td className="px-3 py-3">{row.avgFlexScore}</td>
+                        <td className="px-3 py-3">
+                          {(row.dispatchConfidence * 100).toFixed(0)}%
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div className="mt-5 grid gap-5 lg:grid-cols-[0.75fr_1.25fr]">
