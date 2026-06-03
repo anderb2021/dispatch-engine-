@@ -4,7 +4,7 @@ import json
 import hashlib
 import hmac
 import time
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 import requests
 from . import config
 
@@ -36,11 +36,50 @@ REQUIRED_TESLA_SCOPES = frozenset(
 class TeslaOAuthError(Exception):
     pass
 
+def create_upgrade_link_token(
+    user_id: str, *, expires_seconds: int | None = None
+) -> str:
+    """Signed token for email links (no GridPilot login required)."""
+    if not user_id:
+        raise TeslaOAuthError("Missing user_id for upgrade link.")
+    ttl = expires_seconds if expires_seconds is not None else config.TESLA_UPGRADE_LINK_TTL_SECONDS
+    now = int(time.time())
+    envelope = {
+        "user_id": user_id,
+        "kind": "tesla_upgrade_link",
+        "iat": now,
+        "exp": now + int(ttl),
+    }
+    body = json.dumps(envelope, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    body_b64 = _b64url_encode(body)
+    signature = _state_signature(body_b64.encode("utf-8"))
+    return f"{body_b64}.{_b64url_encode(signature)}"
+
+
+def verify_upgrade_link_token(token: str) -> dict | None:
+    payload = _verify_signed_payload(token)
+    if not payload or payload.get("kind") != "tesla_upgrade_link":
+        return None
+    if not payload.get("user_id"):
+        return None
+    return payload
+
+
+def build_upgrade_link_url(user_id: str, *, next_path: str = "/dashboard") -> str:
+    token = create_upgrade_link_token(user_id)
+    base = config.FRONTEND_BASE_URL.rstrip("/")
+    return (
+        f"{base}/tesla/upgrade-location?token={quote(token)}"
+        f"&next={quote(next_path if next_path.startswith('/') else '/dashboard')}"
+    )
+
+
 def build_authorize_url(
     user_id: str | None = None,
     purpose: str = "connect",
     next_path: str = "/dashboard",
     allow_charging_management: bool = True,
+    auto_login: bool = False,
 ) -> dict:
     if not config.TESLA_CLIENT_ID:
         raise TeslaOAuthError("Missing TESLA_CLIENT_ID in backend .env")
@@ -57,6 +96,7 @@ def build_authorize_url(
             "purpose": purpose,
             "next_path": next_path if next_path.startswith("/") else "/dashboard",
             "allow_charging_management": bool(allow_charging_management),
+            "auto_login": bool(auto_login),
             "nonce": secrets.token_urlsafe(16),
         }
     )
@@ -367,8 +407,12 @@ def _create_signed_state(payload: dict) -> str:
 
 
 def _verify_signed_state(state: str) -> dict | None:
+    return _verify_signed_payload(state)
+
+
+def _verify_signed_payload(token: str) -> dict | None:
     try:
-        body_b64, sig_b64 = state.split(".", 1)
+        body_b64, sig_b64 = token.split(".", 1)
     except ValueError:
         return None
     expected_sig = _state_signature(body_b64.encode("utf-8"))

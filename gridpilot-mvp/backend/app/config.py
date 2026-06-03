@@ -20,6 +20,11 @@ FRONTEND_CALLBACK_URL = os.getenv("FRONTEND_CALLBACK_URL", "http://localhost:300
 FRONTEND_TESLA_LOGIN_CALLBACK_URL = os.getenv(
     "FRONTEND_TESLA_LOGIN_CALLBACK_URL", "http://localhost:3000/auth/tesla/callback"
 )
+FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000")
+# Signed email links for Tesla location upgrade (default 30 days).
+TESLA_UPGRADE_LINK_TTL_SECONDS = int(
+    os.getenv("TESLA_UPGRADE_LINK_TTL_SECONDS", str(30 * 24 * 60 * 60))
+)
 DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
 # Background Tesla telemetry polling (15-minute interval). Set to false to disable.
 TELEMETRY_POLLING_ENABLED = (

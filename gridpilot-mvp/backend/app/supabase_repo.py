@@ -544,6 +544,10 @@ class SupabaseRepo:
             raise TeslaOAuthError("No dashboard summary found for this user.")
         return response.data[0]
 
+    def user_exists(self, user_id: str) -> bool:
+        rows = self._safe_select("profiles", "id", eq_filters={"id": user_id}, limit=1)
+        return bool(rows)
+
     def validate_user_access_token(self, access_token: str) -> str:
         if not access_token:
             raise TeslaOAuthError("Missing access token.")

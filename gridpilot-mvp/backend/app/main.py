@@ -8,6 +8,7 @@ from .tesla import (
     TeslaOAuthError,
     REQUIRED_TESLA_SCOPES,
     build_authorize_url,
+    build_upgrade_link_url,
     exchange_code_for_token,
     extract_granted_scopes,
     extract_identity,
@@ -15,6 +16,7 @@ from .tesla import (
     get_vehicle_data,
     refresh_access_token,
     list_vehicles,
+    verify_upgrade_link_token,
 )
 from .supabase_repo import SupabaseRepo
 from .telemetry import poll_all_connected_vehicles, pull_location_for_user
@@ -100,13 +102,39 @@ def tesla_location_upgrade(
     user_id: str = Query(...),
     next: str = Query("/dashboard"),
 ):
-    """Soft re-authorization to add vehicle_location scope (existing users)."""
+    """Soft re-authorization to add vehicle_location scope (logged-in users)."""
     try:
         data = build_authorize_url(
             user_id=user_id,
             purpose="location_upgrade",
             next_path=next if next.startswith("/") else "/dashboard",
             allow_charging_management=True,
+            auto_login=False,
+        )
+        return RedirectResponse(data["url"])
+    except TeslaOAuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/auth/tesla/upgrade-link")
+def tesla_upgrade_link(
+    token: str = Query(...),
+    next: str = Query("/dashboard"),
+):
+    """Email link entry: no GridPilot login; starts Tesla OAuth then signs user in."""
+    try:
+        payload = verify_upgrade_link_token(token)
+        if not payload:
+            raise TeslaOAuthError(
+                "This upgrade link is invalid or expired. Request a new link from GridPilot."
+            )
+        user_id = payload.get("user_id")
+        data = build_authorize_url(
+            user_id=user_id,
+            purpose="location_upgrade",
+            next_path=next if next.startswith("/") else "/dashboard",
+            allow_charging_management=True,
+            auto_login=True,
         )
         return RedirectResponse(data["url"])
     except TeslaOAuthError as exc:
@@ -151,9 +179,10 @@ def tesla_callback(
 ):
     state_context = get_state_context(state) or {}
     purpose = state_context.get("purpose", "connect")
+    auto_login = bool(state_context.get("auto_login"))
     error_redirect_base = (
         config.FRONTEND_TESLA_LOGIN_CALLBACK_URL
-        if purpose == "login"
+        if purpose == "login" or (purpose == "location_upgrade" and auto_login)
         else config.FRONTEND_CALLBACK_URL
     )
 
@@ -199,6 +228,27 @@ def tesla_callback(
         )
         repo.sync_marketplace_qualification_flags(user_id)
         location_upgraded = "true" if purpose == "location_upgrade" else "false"
+
+        if purpose == "location_upgrade" and auto_login:
+            identity = extract_identity(token_payload)
+            login_session = repo.sign_in_from_tesla_identity(identity)
+            session_user_id = login_session.get("user_id")
+            if session_user_id != user_id:
+                raise TeslaOAuthError(
+                    "This Tesla account does not match your GridPilot profile. "
+                    "Open the upgrade link from the same email we sent you."
+                )
+            access_token = quote(login_session.get("access_token") or "", safe="")
+            refresh_token = quote(login_session.get("refresh_token") or "", safe="")
+            next_path = quote(
+                token_payload.get("next_path", "/dashboard"), safe="/"
+            )
+            return RedirectResponse(
+                f"{config.FRONTEND_TESLA_LOGIN_CALLBACK_URL}?access_token={access_token}"
+                f"&refresh_token={refresh_token}&next={next_path}"
+                f"&connected=true&location_upgraded={location_upgraded}"
+            )
+
         return RedirectResponse(
             f"{config.FRONTEND_CALLBACK_URL}?connected=true&dry_run={str(token_payload.get('dry_run', False)).lower()}&location_upgraded={location_upgraded}"
         )
@@ -429,5 +479,30 @@ def admin_marketplace_users(request: Request):
         repo = SupabaseRepo()
         repo.validate_admin_access_token(access_token)
         return repo.get_admin_marketplace_users()
+    except TeslaOAuthError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+@app.get("/admin/tesla/upgrade-link")
+def admin_tesla_upgrade_link(
+    request: Request,
+    user_id: str = Query(...),
+    next: str = Query("/dashboard"),
+):
+    """Generate a signed email link for Tesla location / integration upgrade."""
+    try:
+        access_token = _require_admin_auth(request)
+        repo = SupabaseRepo()
+        repo.validate_admin_access_token(access_token)
+        if not repo.user_exists(user_id):
+            raise HTTPException(status_code=404, detail="User not found.")
+        upgrade_url = build_upgrade_link_url(
+            user_id, next_path=next if next.startswith("/") else "/dashboard"
+        )
+        return {
+            "user_id": user_id,
+            "upgrade_url": upgrade_url,
+            "expires_in_days": max(1, config.TESLA_UPGRADE_LINK_TTL_SECONDS // 86400),
+        }
     except TeslaOAuthError as exc:
         raise HTTPException(status_code=403, detail=str(exc))

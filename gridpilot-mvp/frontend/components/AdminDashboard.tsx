@@ -20,6 +20,7 @@ import {
   WalletCards,
 } from "lucide-react";
 import { BrandLogo } from "@/components/BrandLogo";
+import { MarketplaceUpgradeLinkButton } from "@/components/MarketplaceUpgradeLinkButton";
 import {
   fallbackDailyFlex,
   fallbackRecentSnapshots,
@@ -869,6 +870,7 @@ export function AdminDashboard() {
                       <th className="px-3 py-2">Location Status</th>
                       <th className="px-3 py-2">Qualification Status</th>
                       <th className="px-3 py-2">Next Action</th>
+                      <th className="px-3 py-2">Email link</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 bg-white">
@@ -883,6 +885,9 @@ export function AdminDashboard() {
                         <td className="px-3 py-3 text-xs">{row.location_verification}</td>
                         <td className="px-3 py-3">{row.qualification_status}</td>
                         <td className="px-3 py-3 text-xs text-slate-600">{row.next_action}</td>
+                        <td className="px-3 py-3">
+                          <MarketplaceUpgradeLinkButton userId={row.user_id} />
+                        </td>
                       </tr>
                     ))}
                   </tbody>
