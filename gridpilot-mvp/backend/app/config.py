@@ -1,5 +1,7 @@
 import os
 from dataclasses import dataclass
+from urllib.parse import urlparse
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -20,7 +22,33 @@ FRONTEND_CALLBACK_URL = os.getenv("FRONTEND_CALLBACK_URL", "http://localhost:300
 FRONTEND_TESLA_LOGIN_CALLBACK_URL = os.getenv(
     "FRONTEND_TESLA_LOGIN_CALLBACK_URL", "http://localhost:3000/auth/tesla/callback"
 )
-FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000")
+# Production default when unset (override with FRONTEND_BASE_URL on Render).
+GRIDPILOT_PRODUCTION_FRONTEND_URL = "https://www.joingridpilot.com"
+
+
+def get_frontend_base_url() -> str:
+    """Public site origin for email links and redirects."""
+    explicit = os.getenv("FRONTEND_BASE_URL", "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+
+    for env_key in ("FRONTEND_TESLA_LOGIN_CALLBACK_URL", "FRONTEND_CALLBACK_URL"):
+        raw = os.getenv(env_key, "").strip()
+        if not raw:
+            continue
+        parsed = urlparse(raw)
+        if parsed.scheme and parsed.netloc:
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+            if "localhost" not in origin and "127.0.0.1" not in origin:
+                return origin
+
+    dry_run = os.getenv("DRY_RUN", "true").lower() == "true"
+    if not dry_run:
+        return GRIDPILOT_PRODUCTION_FRONTEND_URL
+    return "http://localhost:3000"
+
+
+FRONTEND_BASE_URL = get_frontend_base_url()
 # Signed email links for Tesla location upgrade (default 30 days).
 TESLA_UPGRADE_LINK_TTL_SECONDS = int(
     os.getenv("TESLA_UPGRADE_LINK_TTL_SECONDS", str(30 * 24 * 60 * 60))

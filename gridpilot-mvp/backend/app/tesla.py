@@ -67,7 +67,7 @@ def verify_upgrade_link_token(token: str) -> dict | None:
 
 def build_upgrade_link_url(user_id: str, *, next_path: str = "/dashboard") -> str:
     token = create_upgrade_link_token(user_id)
-    base = config.FRONTEND_BASE_URL.rstrip("/")
+    base = config.get_frontend_base_url().rstrip("/")
     return (
         f"{base}/tesla/upgrade-location?token={quote(token)}"
         f"&next={quote(next_path if next_path.startswith('/') else '/dashboard')}"

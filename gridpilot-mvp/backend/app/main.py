@@ -499,10 +499,15 @@ def admin_tesla_upgrade_link(
         upgrade_url = build_upgrade_link_url(
             user_id, next_path=next if next.startswith("/") else "/dashboard"
         )
+        from .tesla import create_upgrade_link_token
+
+        token = create_upgrade_link_token(user_id)
         return {
             "user_id": user_id,
+            "token": token,
             "upgrade_url": upgrade_url,
             "expires_in_days": max(1, config.TESLA_UPGRADE_LINK_TTL_SECONDS // 86400),
+            "frontend_base_url": config.get_frontend_base_url(),
         }
     except TeslaOAuthError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
