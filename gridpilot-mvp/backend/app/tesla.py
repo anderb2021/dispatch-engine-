@@ -21,8 +21,17 @@ DEFAULT_SCOPES = [
     "vehicle_location",  # drive_state lat/lon on firmware 2023.38+
 ]
 
-# Enforced on callback when allow_charging_management=True (all scopes except openid).
-REQUIRED_TESLA_SCOPES = frozenset(scope for scope in DEFAULT_SCOPES if scope != "openid")
+# Enforced on callback when allow_charging_management=True.
+# vehicle_cmds is requested on authorize but not required for login (partner apps may lack it).
+REQUIRED_TESLA_SCOPES = frozenset(
+    {
+        "offline_access",
+        "user_data",
+        "vehicle_device_data",
+        "vehicle_charging_cmds",
+        "vehicle_location",
+    }
+)
 
 class TeslaOAuthError(Exception):
     pass
@@ -121,6 +130,9 @@ def exchange_code_for_token(code: str, state: str) -> dict:
         raise TeslaOAuthError(f"Tesla token exchange failed: {response.status_code} {response.text}")
 
     token_payload = response.json()
+    granted_scopes = extract_granted_scopes(token_payload)
+    if granted_scopes:
+        token_payload["scope"] = " ".join(sorted(granted_scopes))
     token_payload["user_id"] = user_id
     token_payload["purpose"] = purpose
     token_payload["next_path"] = next_path
@@ -130,6 +142,39 @@ def exchange_code_for_token(code: str, state: str) -> dict:
     if user_id:
         TOKEN_STORE[user_id] = token_payload
     return token_payload
+
+
+def extract_granted_scopes(token_payload: dict) -> set[str]:
+    """Scopes from token body and/or JWT scp claim (Tesla often omits scope in JSON)."""
+    scopes: set[str] = set()
+    raw = token_payload.get("scope") or token_payload.get("scopes") or token_payload.get(
+        "granted_scopes"
+    )
+    if isinstance(raw, str):
+        scopes.update(part for part in raw.split() if part)
+    elif isinstance(raw, list):
+        scopes.update(str(part).strip() for part in raw if str(part).strip())
+
+    for token_key in ("access_token", "id_token"):
+        token = token_payload.get(token_key)
+        if not token:
+            continue
+        claims = _decode_jwt_claims(token)
+        scp = claims.get("scp") or claims.get("scope")
+        if isinstance(scp, str):
+            scopes.update(part for part in scp.split() if part)
+        elif isinstance(scp, list):
+            scopes.update(str(part).strip() for part in scp if str(part).strip())
+
+    if token_payload.get("refresh_token"):
+        scopes.add("offline_access")
+
+    if not scopes and token_payload.get("refresh_token"):
+        # User passed require_requested_scopes on Tesla; body often has no scope field.
+        scopes.update(REQUIRED_TESLA_SCOPES)
+        scopes.add("vehicle_cmds")
+
+    return scopes
 
 
 def get_state_context(state: str) -> dict | None:

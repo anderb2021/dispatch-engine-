@@ -9,6 +9,7 @@ from .tesla import (
     REQUIRED_TESLA_SCOPES,
     build_authorize_url,
     exchange_code_for_token,
+    extract_granted_scopes,
     extract_identity,
     get_state_context,
     get_vehicle_data,
@@ -65,17 +66,8 @@ def tesla_start(user_id: str = Query(...)):
     except TeslaOAuthError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-def _extract_scopes(token_payload: dict) -> set[str]:
-    raw_scopes = token_payload.get("scope") or token_payload.get("scopes") or []
-    if isinstance(raw_scopes, str):
-        return {scope for scope in raw_scopes.split() if scope}
-    if isinstance(raw_scopes, list):
-        return {str(scope).strip() for scope in raw_scopes if str(scope).strip()}
-    return set()
-
-
 def _enforce_required_tesla_scopes(token_payload: dict):
-    granted = _extract_scopes(token_payload)
+    granted = extract_granted_scopes(token_payload)
     missing = REQUIRED_TESLA_SCOPES - granted
     if missing:
         raise TeslaOAuthError(

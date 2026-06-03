@@ -35,9 +35,9 @@ def parse_scope_list(raw: Any) -> list[str]:
 
 def scopes_from_token_payload(token_payload: dict[str, Any]) -> tuple[list[str], list[str]]:
     """Return (granted_scopes, requested_scopes) from Tesla token response."""
-    granted = parse_scope_list(
-        token_payload.get("scope") or token_payload.get("scopes") or token_payload.get("granted_scopes")
-    )
+    from .tesla import extract_granted_scopes
+
+    granted = sorted(extract_granted_scopes(token_payload))
     requested = parse_scope_list(token_payload.get("requested_scopes"))
     if not requested:
         requested = list(REQUESTED_TESLA_SCOPES)
