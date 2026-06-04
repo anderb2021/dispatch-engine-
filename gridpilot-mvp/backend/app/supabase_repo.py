@@ -191,7 +191,7 @@ class SupabaseRepo:
             tesla_vehicle_id = str(vehicle.get("id_s") or vehicle.get("id") or "")
             if not tesla_vehicle_id:
                 continue
-            vin = vehicle.get("vin") or ""
+            vin = str(vehicle.get("vin") or "").strip()
             charge_state = vehicle.get("charge_state") or {}
             vehicle_config = vehicle.get("vehicle_config") or {}
             records.append(
@@ -199,6 +199,7 @@ class SupabaseRepo:
                     "user_id": user_id,
                     "tesla_connection_id": tesla_connection_id,
                     "tesla_vehicle_id": tesla_vehicle_id,
+                    "vin": vin or None,
                     "vin_last_6": vin[-6:] if vin else None,
                     "display_name": vehicle.get("display_name"),
                     "model": vehicle_config.get("car_type"),

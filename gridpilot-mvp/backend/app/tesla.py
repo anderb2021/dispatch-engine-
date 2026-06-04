@@ -283,8 +283,39 @@ def list_vehicles(access_token: str) -> dict:
     return response.json()
 
 
+def unwrap_vehicle_data_payload(payload: dict) -> dict:
+    """Normalize Fleet API vehicle_data JSON to a flat charge_state / drive_state dict."""
+    if not isinstance(payload, dict):
+        return {}
+    inner = payload.get("response")
+    if isinstance(inner, dict) and (
+        "charge_state" in inner
+        or "drive_state" in inner
+        or "location_data" in inner
+        or "vehicle_state" in inner
+    ):
+        return inner
+    if "charge_state" in payload or "drive_state" in payload or "location_data" in payload:
+        return payload
+    return inner if isinstance(inner, dict) else payload
+
+
+def merge_vehicle_data_parts(base: dict, extra: dict) -> dict:
+    """Merge endpoint slices (e.g. location_data follow-up) into one response object."""
+    merged = dict(base)
+    for key in ("charge_state", "drive_state", "location_data", "vehicle_state"):
+        value = extra.get(key)
+        if isinstance(value, dict) and value:
+            merged[key] = value
+    return merged
+
+
 def get_vehicle_data(
-    tesla_vehicle_id: str, access_token: str, *, include_location: bool = True
+    tesla_vehicle_id: str,
+    access_token: str,
+    *,
+    include_location: bool = True,
+    endpoints: str | None = None,
 ) -> dict:
     if config.DRY_RUN:
         return {
@@ -316,11 +347,13 @@ def get_vehicle_data(
         }
 
     # location_data is required on 2023.38+ for lat/lon when parked; skip if scope not granted.
-    endpoints = "charge_state;drive_state"
-    if include_location:
-        endpoints += ";location_data"
+    if endpoints is None:
+        endpoints = "charge_state;drive_state"
+        if include_location:
+            endpoints += ";location_data"
+    vehicle_ref = str(tesla_vehicle_id).strip()
     url = (
-        f"{config.TESLA_FLEET_BASE_URL}/api/1/vehicles/{tesla_vehicle_id}/vehicle_data"
+        f"{config.TESLA_FLEET_BASE_URL}/api/1/vehicles/{vehicle_ref}/vehicle_data"
         f"?endpoints={endpoints}"
     )
     response = requests.get(

@@ -109,12 +109,80 @@ def extract_location_from_response(response_data: dict[str, Any]) -> tuple[float
     return None, None
 
 
+def fetch_vehicle_telemetry(
+    tesla_vehicle_id: str,
+    access_token: str,
+    *,
+    allow_location: bool = True,
+    vin: str | None = None,
+) -> dict[str, Any]:
+    """Fetch vehicle_data and, when allowed, follow up with a location-only request.
+
+    Tesla firmware 2023.38+ omits lat/lon unless location_data is requested with
+    vehicle_location scope. A second call often returns coords when the combined
+    poll response does not include drive_state/location_data keys.
+    """
+    from .tesla import get_vehicle_data, merge_vehicle_data_parts, unwrap_vehicle_data_payload
+
+    vehicle_ref = (vin or tesla_vehicle_id or "").strip()
+    if not vehicle_ref:
+        raise ValueError("Missing Tesla vehicle id or VIN.")
+
+    primary = get_vehicle_data(
+        vehicle_ref,
+        access_token,
+        include_location=allow_location,
+    )
+    data = unwrap_vehicle_data_payload(primary)
+    endpoints_used = "charge_state;drive_state"
+    if allow_location:
+        endpoints_used += ";location_data"
+
+    meta: dict[str, Any] = {
+        "allow_location": allow_location,
+        "vehicle_ref": vehicle_ref,
+        "endpoints_primary": endpoints_used,
+        "has_drive_state": bool(data.get("drive_state")),
+        "has_location_data": bool(data.get("location_data")),
+    }
+
+    if allow_location:
+        charge_state = data.get("charge_state") or {}
+        plugged_in = derive_plugged_in(charge_state)
+        charging_state = charge_state.get("charging_state")
+        meta["plugged_in_for_location"] = is_connected_or_charging(plugged_in, charging_state)
+
+        if meta["plugged_in_for_location"]:
+            lat, lon = extract_location_from_response(data)
+            meta["coords_from_primary"] = lat is not None and lon is not None
+            if lat is None:
+                try:
+                    follow_up = get_vehicle_data(
+                        vehicle_ref,
+                        access_token,
+                        include_location=True,
+                        endpoints="location_data;drive_state",
+                    )
+                    follow_data = unwrap_vehicle_data_payload(follow_up)
+                    data = merge_vehicle_data_parts(data, follow_data)
+                    meta["endpoints_follow_up"] = "location_data;drive_state"
+                    meta["has_drive_state"] = bool(data.get("drive_state"))
+                    meta["has_location_data"] = bool(data.get("location_data"))
+                    lat, lon = extract_location_from_response(data)
+                    meta["coords_after_follow_up"] = lat is not None and lon is not None
+                except Exception as exc:  # pragma: no cover - best effort
+                    meta["follow_up_error"] = str(exc)[:200]
+
+    data["_gridpilot"] = meta
+    return {"response": data}
+
+
 def location_diagnostic(response_data: dict[str, Any]) -> dict[str, Any]:
     """Admin/debug summary of what Tesla returned for location (no raw secrets)."""
     drive_state = response_data.get("drive_state") or {}
     location_data = response_data.get("location_data") or {}
     lat, lon = extract_location_from_response(response_data)
-    return {
+    summary = {
         "tesla_latitude": lat,
         "tesla_longitude": lon,
         "drive_state_has_latitude": drive_state.get("latitude") is not None,
@@ -125,6 +193,10 @@ def location_diagnostic(response_data: dict[str, Any]) -> dict[str, Any]:
             and location_data.get("longitude") is not None
         ),
     }
+    grid_meta = response_data.get("_gridpilot")
+    if isinstance(grid_meta, dict):
+        summary["gridpilot_fetch"] = grid_meta
+    return summary
 
 
 def _to_float(value: Any) -> float:
@@ -444,7 +516,7 @@ def pull_location_for_user(
     """
     import time
 
-    from .tesla import TeslaOAuthError, get_vehicle_data, wake_vehicle
+    from .tesla import TeslaOAuthError, wake_vehicle
 
     result: dict[str, Any] = {
         "user_id": user_id,
@@ -525,10 +597,11 @@ def pull_location_for_user(
             for attempt in range(max_attempts):
                 row["attempts"] = attempt + 1
                 try:
-                    payload = get_vehicle_data(
+                    payload = fetch_vehicle_telemetry(
                         tesla_vehicle_id=tesla_vehicle_id,
                         access_token=access_token,
-                        include_location=allow_location,
+                        allow_location=allow_location,
+                        vin=vehicle.get("vin"),
                     )
                     response_data = payload.get("response") or payload
                     if (
@@ -608,7 +681,7 @@ def poll_all_connected_vehicles(repo: "Any") -> dict[str, Any]:
       continues, and a summary dict is returned.
     """
     # Imported lazily to avoid any import cycle and keep this module removable.
-    from .tesla import TeslaOAuthError, get_vehicle_data
+    from .tesla import TeslaOAuthError
 
     result: dict[str, Any] = {
         "users_polled": 0,
@@ -640,10 +713,11 @@ def poll_all_connected_vehicles(repo: "Any") -> dict[str, Any]:
             tesla_vehicle_id = vehicle.get("tesla_vehicle_id")
             try:
                 try:
-                    payload = get_vehicle_data(
+                    payload = fetch_vehicle_telemetry(
                         tesla_vehicle_id=tesla_vehicle_id,
                         access_token=access_token,
-                        include_location=allow_location,
+                        allow_location=allow_location,
+                        vin=vehicle.get("vin"),
                     )
                 except TeslaOAuthError as exc:
                     message = str(exc)
@@ -657,10 +731,11 @@ def poll_all_connected_vehicles(repo: "Any") -> dict[str, Any]:
                     if not refreshed and _is_expired(message):
                         access_token = repo.refresh_tokens_for_user(user_id)
                         refreshed = True
-                        payload = get_vehicle_data(
+                        payload = fetch_vehicle_telemetry(
                             tesla_vehicle_id=tesla_vehicle_id,
                             access_token=access_token,
-                            include_location=allow_location,
+                            allow_location=allow_location,
+                            vin=vehicle.get("vin"),
                         )
                     else:
                         raise

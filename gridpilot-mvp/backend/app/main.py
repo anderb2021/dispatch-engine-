@@ -19,7 +19,7 @@ from .tesla import (
     verify_upgrade_link_token,
 )
 from .supabase_repo import SupabaseRepo
-from .telemetry import poll_all_connected_vehicles, pull_location_for_user
+from .telemetry import fetch_vehicle_telemetry, poll_all_connected_vehicles, pull_location_for_user
 from .telemetry_scheduler import start_telemetry_scheduler, stop_telemetry_scheduler
 
 app = FastAPI(title="GridPilot EBON API")
@@ -308,10 +308,11 @@ def tesla_poll_telemetry(user_id: str = Query(...)):
         for vehicle in vehicles:
             try:
                 include_location = repo.user_has_vehicle_location_scope(user_id)
-                telemetry_payload = get_vehicle_data(
+                telemetry_payload = fetch_vehicle_telemetry(
                     tesla_vehicle_id=vehicle["tesla_vehicle_id"],
                     access_token=access_token,
-                    include_location=include_location,
+                    allow_location=include_location,
+                    vin=vehicle.get("vin"),
                 )
             except TeslaOAuthError as exc:
                 if retried_after_refresh or not _is_expired_tesla_token_error(exc):
@@ -319,10 +320,11 @@ def tesla_poll_telemetry(user_id: str = Query(...)):
                 access_token = _refresh_tesla_tokens(repo, user_id)
                 retried_after_refresh = True
                 include_location = repo.user_has_vehicle_location_scope(user_id)
-                telemetry_payload = get_vehicle_data(
+                telemetry_payload = fetch_vehicle_telemetry(
                     tesla_vehicle_id=vehicle["tesla_vehicle_id"],
                     access_token=access_token,
-                    include_location=include_location,
+                    allow_location=include_location,
+                    vin=vehicle.get("vin"),
                 )
             snapshots.append(
                 repo.insert_vehicle_snapshot(
