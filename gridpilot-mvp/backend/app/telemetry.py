@@ -18,6 +18,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
+from . import config
+
 # Charging states (from Tesla charge_state.charging_state) that mean the car is
 # physically connected to a charger. Used for the location-storage rule.
 CONNECTED_CHARGING_STATES = {
@@ -33,10 +35,9 @@ CONNECTED_CHARGING_STATES = {
 # conn_charge_cable values when nothing is plugged in (Tesla Fleet API).
 _NO_CABLE_VALUES = {"<invalid>", "invalid", "none", ""}
 
-# Cap applied to the gap between two consecutive snapshots when integrating
-# plugged/charging minutes. Polling runs every 15 min; if a poll is missed we do
-# not want a multi-hour gap to overcount. 0.5h is a conservative ceiling.
-MAX_INTERVAL_HOURS = 0.5
+# Cap gap between snapshots when integrating plugged/charging minutes.
+# Matches poll interval so 6-hour polls do not under-count session time.
+MAX_INTERVAL_HOURS = max(0.5, float(config.TELEMETRY_POLL_INTERVAL_HOURS))
 
 # Conservative fraction of idle-plugged energy assumed to be dispatchable.
 FLEXIBLE_ENERGY_FRACTION = 0.5

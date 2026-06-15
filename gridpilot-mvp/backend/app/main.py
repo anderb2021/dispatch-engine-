@@ -399,7 +399,7 @@ def admin_flexibility_daily(request: Request):
 
 @app.post("/admin/telemetry/poll")
 def admin_telemetry_poll(request: Request):
-    """Manual trigger for the same 15-minute polling job (admin only)."""
+    """Manual trigger for the scheduled telemetry polling job (admin only)."""
     try:
         access_token = _require_admin_auth(request)
         repo = SupabaseRepo()

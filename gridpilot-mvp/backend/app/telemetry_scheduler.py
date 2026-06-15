@@ -1,7 +1,7 @@
 """Background scheduler for Tesla telemetry polling.
 
-Runs every 15 minutes when TELEMETRY_POLLING_ENABLED is true. Failures are
-logged but never crash the worker process.
+Runs on a configurable interval (default every 6 hours) when
+TELEMETRY_POLLING_ENABLED is true. Failures are logged but never crash the worker.
 """
 
 from __future__ import annotations
@@ -46,18 +46,20 @@ def start_telemetry_scheduler() -> None:
     if _scheduler is not None:
         return
 
+    hours = max(0.25, float(config.TELEMETRY_POLL_INTERVAL_HOURS))
+
     _scheduler = BackgroundScheduler()
     _scheduler.add_job(
         _run_poll_job,
         trigger="interval",
-        minutes=15,
+        hours=hours,
         id="tesla_telemetry_poll",
         replace_existing=True,
         max_instances=1,
         coalesce=True,
     )
     _scheduler.start()
-    logger.info("Telemetry scheduler started (every 15 minutes)")
+    logger.info("Telemetry scheduler started (every %s hour(s))", hours)
 
 
 def stop_telemetry_scheduler() -> None:

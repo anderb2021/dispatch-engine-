@@ -637,7 +637,7 @@ export function AdminDashboard() {
                 Telemetry &amp; Flexibility Analytics
               </h2>
               <p className="text-sm text-slate-500">
-                Tesla fleet charging telemetry (15-min polls) and rule-based flexibility estimates.
+                Tesla fleet charging telemetry (scheduled polls, default every 6 hours) and rule-based flexibility estimates.
               </p>
             </div>
             {isLoadingFlexAnalytics ? (

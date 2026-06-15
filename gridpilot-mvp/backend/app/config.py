@@ -54,9 +54,13 @@ TESLA_UPGRADE_LINK_TTL_SECONDS = int(
     os.getenv("TESLA_UPGRADE_LINK_TTL_SECONDS", str(30 * 24 * 60 * 60))
 )
 DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
-# Background Tesla telemetry polling (15-minute interval). Set to false to disable.
+# Background Tesla telemetry polling. Set to false to disable.
 TELEMETRY_POLLING_ENABLED = (
     os.getenv("TELEMETRY_POLLING_ENABLED", "true").lower() == "true"
+)
+# How often to poll all connected vehicles (hours). Default: every 6 hours.
+TELEMETRY_POLL_INTERVAL_HOURS = float(
+    os.getenv("TELEMETRY_POLL_INTERVAL_HOURS", "6")
 )
 
 TESLA_AUTH_URL = "https://auth.tesla.com/oauth2/v3/authorize"
